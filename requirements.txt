@@ -1,0 +1,11 @@
+flask==2.3.3
+openai==1.6.1
+langchain==0.1.0
+langchain-openai==0.0.2
+langgraph==0.1.0
+langfuse==2.0.0
+python-dotenv==1.0.0
+pymongo==4.5.0
+sendgrid==6.10.0
+flask-cors==4.0.0
+gunicorn==21.2.0 
