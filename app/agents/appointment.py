@@ -162,26 +162,32 @@ def appointment_agent(state):
         Only output valid JSON without additional text.
         """
         
-        # Create a Langfuse span for timing
-        with trace.span(name="gpt4_appointment_extraction") as span:
-            # Extract appointment details using GPT-4o
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": transcript}
-                ],
-                temperature=0.1
-            )
-            
-            try:
-                # Parse the JSON response
-                appointment_data = json.loads(response.choices[0].message.content)
-                span.add_metadata({"extracted_data": appointment_data})
-            except json.JSONDecodeError:
-                # If not valid JSON, use a fallback
-                appointment_data = {"action": "incomplete", "missing": ["all fields"]}
-                span.add_metadata({"json_error": response.choices[0].message.content})
+        # Create a Langfuse span directly without context manager
+        span = trace.span(name="gpt4_appointment_extraction")
+        
+        # Extract appointment details using GPT-4o
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ],
+            temperature=0.1
+        )
+        
+        try:
+            # Parse the JSON response
+            appointment_data = json.loads(response.choices[0].message.content)
+            # Create a new span with metadata instead of adding metadata to existing span
+            trace.span(name="json_parsing", metadata={"extracted_data": appointment_data})
+        except json.JSONDecodeError:
+            # If not valid JSON, use a fallback
+            appointment_data = {"action": "incomplete", "missing": ["all fields"]}
+            # Create a new span with error metadata
+            trace.span(name="json_error", metadata={"json_error": response.choices[0].message.content})
+        
+        # End the original span
+        span.end()
         
         # Handle based on the action
         action = appointment_data.get("action", "")

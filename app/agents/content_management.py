@@ -71,41 +71,58 @@ def content_management_agent(state):
         
         # If issues were found, modify the response
         if issues_found:
-            trace.add_metadata({"issues_found": issues_found})
+            # Create a span with issues found metadata
+            trace.span(
+                name="compliance_issues",
+                metadata={"issues_found": issues_found}
+            )
             
-            with trace.span(name="gpt4_content_correction") as span:
-                # Use GPT-4o to fix the response
-                system_prompt = f"""
-                You are an AI content reviewer for a healthcare clinic. Review the following response 
-                for compliance issues and modify it to be compliant with these guidelines:
-                
-                Guidelines:
-                {', '.join(COMPLIANCE_GUIDELINES)}
-                
-                The following problematic phrases were identified:
-                {', '.join(issues_found)}
-                
-                Rewrite the response to fix these issues while maintaining the helpful intent and core information.
-                """
-                
-                correction_response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": response}
-                    ],
-                    temperature=0.3
-                )
-                
-                # Update the response
-                state["response"] = correction_response.choices[0].message.content
-                span.add_metadata({
+            # Create a span for content correction without context manager
+            span = trace.span(name="gpt4_content_correction")
+            
+            # Use GPT-4o to fix the response
+            system_prompt = f"""
+            You are an AI content reviewer for a healthcare clinic. Review the following response 
+            for compliance issues and modify it to be compliant with these guidelines:
+            
+            Guidelines:
+            {', '.join(COMPLIANCE_GUIDELINES)}
+            
+            The following problematic phrases were identified:
+            {', '.join(issues_found)}
+            
+            Rewrite the response to fix these issues while maintaining the helpful intent and core information.
+            """
+            
+            correction_response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": response}
+                ],
+                temperature=0.3
+            )
+            
+            # Update the response
+            state["response"] = correction_response.choices[0].message.content
+            
+            # Create a new span with the original and modified responses
+            trace.span(
+                name="response_comparison",
+                metadata={
                     "original_response": response,
                     "modified_response": state["response"]
-                })
+                }
+            )
+            
+            # End the original span
+            span.end()
         else:
-            # No issues found, but still track it in Langfuse
-            trace.add_metadata({"validated": True, "changes_needed": False})
+            # No issues found, create a span with validation information
+            trace.span(
+                name="validation_result",
+                metadata={"validated": True, "changes_needed": False}
+            )
         
         # In a more advanced system, we could also:
         # 1. Check response against a vector store of previous responses

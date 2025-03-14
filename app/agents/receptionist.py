@@ -1,5 +1,6 @@
 import os
 import io
+import tempfile
 from openai import OpenAI
 from langfuse.client import Langfuse
 
@@ -30,21 +31,29 @@ def transcribe_audio(audio_file):
     )
     
     try:
-        # Save audio to a temporary file
+        # Read audio data
         audio_data = audio_file.read()
         
-        # Create a Langfuse span for timing
-        with trace.span(name="whisper_transcription") as span:
-            # Transcribe with Whisper
+        # Create a temporary file with the correct extension
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_audio:
+            temp_audio.write(audio_data)
+            temp_audio_path = temp_audio.name
+        
+        # Transcribe with Whisper using the temporary file
+        with open(temp_audio_path, 'rb') as audio:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
-                file=io.BytesIO(audio_data)
+                file=audio
             )
-            
-            # Log the result
-            span.add_metadata({
-                "transcript_length": len(transcript.text)
-            })
+        
+        # Create a span with metadata directly in the constructor
+        trace.span(
+            name="whisper_transcription", 
+            metadata={"transcript_length": len(transcript.text)}
+        )
+        
+        # Remove the temporary file
+        os.unlink(temp_audio_path)
         
         trace.update(status="success")
         return transcript.text
@@ -84,24 +93,23 @@ def process_query(transcript):
         Respond with ONLY the intent category as a single word.
         """
         
-        # Create a Langfuse span for timing
-        with trace.span(name="gpt4_intent_classification") as span:
-            # Identify intent using GPT-4o
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": transcript}
-                ],
-                temperature=0.1
-            )
-            
-            intent = response.choices[0].message.content.strip().lower()
-            
-            # Log the result
-            span.add_metadata({
-                "detected_intent": intent
-            })
+        # Identify intent using GPT-4o
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ],
+            temperature=0.1
+        )
+        
+        intent = response.choices[0].message.content.strip().lower()
+        
+        # Create a span with metadata directly in the constructor
+        trace.span(
+            name="gpt4_intent_classification",
+            metadata={"detected_intent": intent}
+        )
         
         trace.update(status="success")
         return intent

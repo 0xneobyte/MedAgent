@@ -69,53 +69,69 @@ def call_center_agent(state):
         
         # Check if the query matches any knowledge base items
         knowledge_base_match = None
+        matched_category = None
+        matched_phrase = None
         
         for category, data in KNOWLEDGE_BASE.items():
             for phrase in data["question"]:
                 if phrase.lower() in transcript.lower():
                     knowledge_base_match = data["answer"]
-                    trace.add_metadata({
-                        "matched_category": category,
-                        "matched_phrase": phrase
-                    })
+                    matched_category = category
+                    matched_phrase = phrase
                     break
             if knowledge_base_match:
                 break
         
-        # If we have a direct match from the knowledge base, use it
+        # If we found a match, create a span with the match information
         if knowledge_base_match:
+            trace.span(
+                name="knowledge_base_match",
+                metadata={
+                    "matched_category": matched_category,
+                    "matched_phrase": matched_phrase
+                }
+            )
             state["response"] = knowledge_base_match
         else:
-            # Create a Langfuse span for timing
-            with trace.span(name="gpt4_general_inquiry") as span:
-                # If no direct match, use GPT-4o for a response
-                system_prompt = """
-                You are an AI assistant for a healthcare clinic. Your goal is to provide helpful, accurate, 
-                and concise responses to patient inquiries about clinic services, policies, and general 
-                medical information. 
-                
-                Here are some guidelines:
-                1. Provide accurate information about clinic services, hours, and policies.
-                2. For general medical information, provide widely accepted information but avoid making specific diagnoses.
-                3. If asked about emergencies, always advise patients to call 911 or go to the nearest emergency room.
-                4. Keep responses friendly, professional, and concise.
-                5. Do not provide information on prescription drugs or treatment recommendations.
-                6. If you're unsure about something, acknowledge that and suggest the patient speak with a healthcare provider.
-                
-                Remember, you represent a healthcare clinic, so maintain professionalism at all times.
-                """
-                
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": transcript}
-                    ],
-                    temperature=0.7
-                )
-                
-                state["response"] = response.choices[0].message.content
-                span.add_metadata({"response_length": len(state["response"])})
+            # Create a Langfuse span for GPT response without using context manager
+            span = trace.span(name="gpt4_general_inquiry")
+            
+            # If no direct match, use GPT-4o for a response
+            system_prompt = """
+            You are an AI assistant for a healthcare clinic. Your goal is to provide helpful, accurate, 
+            and concise responses to patient inquiries about clinic services, policies, and general 
+            medical information. 
+            
+            Here are some guidelines:
+            1. Provide accurate information about clinic services, hours, and policies.
+            2. For general medical information, provide widely accepted information but avoid making specific diagnoses.
+            3. If asked about emergencies, always advise patients to call 911 or go to the nearest emergency room.
+            4. Keep responses friendly, professional, and concise.
+            5. Do not provide information on prescription drugs or treatment recommendations.
+            6. If you're unsure about something, acknowledge that and suggest the patient speak with a healthcare provider.
+            
+            Remember, you represent a healthcare clinic, so maintain professionalism at all times.
+            """
+            
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": transcript}
+                ],
+                temperature=0.7
+            )
+            
+            state["response"] = response.choices[0].message.content
+            
+            # Create a new span with the response length metadata
+            trace.span(
+                name="response_metadata", 
+                metadata={"response_length": len(state["response"])}
+            )
+            
+            # End the original span
+            span.end()
         
         trace.update(status="success")
     

@@ -143,17 +143,24 @@ def notification_agent(state):
         # For demo, we'll use a placeholder
         patient_email = "patient@example.com"
         
-        # Create a Langfuse span for timing
-        with trace.span(name="send_email_notification") as span:
-            # Send the email
-            success = send_email(patient_email, subject, content)
-            
-            # Log the result
-            span.add_metadata({
+        # Create a Langfuse span without using context manager
+        span = trace.span(name="send_email_notification")
+        
+        # Send the email
+        success = send_email(patient_email, subject, content)
+        
+        # Create a new span with the email metadata
+        trace.span(
+            name="email_result",
+            metadata={
                 "email_sent": success,
                 "recipient": patient_email,
                 "subject": subject
-            })
+            }
+        )
+        
+        # End the original span
+        span.end()
         
         # Record the notification in the state
         state["notification_sent"] = success

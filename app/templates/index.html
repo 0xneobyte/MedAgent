@@ -196,15 +196,38 @@
       // Start recording
       function startRecording() {
         navigator.mediaDevices
-          .getUserMedia({ audio: true })
+          .getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              channelCount: 1,
+              sampleRate: 44100,
+            },
+          })
           .then((stream) => {
             // Update UI
             micButton.classList.add("recording");
             listeningIndicator.style.display = "block";
             statusBox.textContent = "Listening to your voice...";
 
-            // Initialize media recorder with stream
-            mediaRecorder = new MediaRecorder(stream);
+            // Try different audio format options that are widely supported
+            let options;
+            try {
+              // Try MP3 first (most compatible with Whisper)
+              options = { mimeType: "audio/mpeg" };
+              mediaRecorder = new MediaRecorder(stream, options);
+            } catch (e1) {
+              try {
+                // Fall back to WebM
+                options = { mimeType: "audio/webm" };
+                mediaRecorder = new MediaRecorder(stream, options);
+              } catch (e2) {
+                // Last resort: use browser default
+                mediaRecorder = new MediaRecorder(stream);
+              }
+            }
+
             audioChunks = [];
 
             // Handle data available event
@@ -219,10 +242,14 @@
               listeningIndicator.style.display = "none";
               statusBox.textContent = "Processing your request...";
 
-              // Create audio blob and send to server
-              const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+              // Create audio blob
+              const audioType = mediaRecorder.mimeType || "audio/mp3";
+              const audioBlob = new Blob(audioChunks, { type: audioType });
               const formData = new FormData();
-              formData.append("audio", audioBlob);
+
+              // Use file extension that matches the mime type
+              const fileExtension = audioType.includes("webm") ? "webm" : "mp3";
+              formData.append("audio", audioBlob, `recording.${fileExtension}`);
 
               fetch("/api/transcribe", {
                 method: "POST",
@@ -260,12 +287,12 @@
             // Start recording
             mediaRecorder.start();
 
-            // Stop recording after 5 seconds
+            // Record for longer (10 seconds) to get more audio
             setTimeout(() => {
               if (mediaRecorder.state !== "inactive") {
                 mediaRecorder.stop();
               }
-            }, 5000);
+            }, 10000);
           })
           .catch((error) => {
             console.error("Error accessing microphone:", error);

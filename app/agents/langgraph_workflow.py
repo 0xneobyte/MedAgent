@@ -14,15 +14,15 @@ class WorkflowState(TypedDict):
     response: str
     appointment_details: Dict[str, Any]
 
-# Define the state flow for our agents
-workflow = StateGraph(state_schema=WorkflowState)
+# Define the state flow for our agents with state_schema
+workflow_builder = StateGraph(state_schema=WorkflowState)
 
 # Add nodes for each agent
-workflow.add_node("receptionist", receptionist_agent)
-workflow.add_node("appointment", appointment_agent)
-workflow.add_node("call_center", call_center_agent)
-workflow.add_node("content_management", content_management_agent)
-workflow.add_node("notification", notification_agent)
+workflow_builder.add_node("receptionist", receptionist_agent)
+workflow_builder.add_node("appointment", appointment_agent)
+workflow_builder.add_node("call_center", call_center_agent)
+workflow_builder.add_node("content_management", content_management_agent)
+workflow_builder.add_node("notification", notification_agent)
 
 # Define the edges between agents
 # The receptionist is the entry point and routes based on intent
@@ -38,7 +38,7 @@ def route_by_intent(state):
         return "call_center"
 
 # Set up the routing from receptionist
-workflow.add_conditional_edges(
+workflow_builder.add_conditional_edges(
     "receptionist",
     route_by_intent,
     {
@@ -48,14 +48,14 @@ workflow.add_conditional_edges(
 )
 
 # After appointment handling, route to notification agent
-workflow.add_edge("appointment", "notification")
+workflow_builder.add_edge("appointment", "notification")
 
 # All responses should go through content management for validation
-workflow.add_edge("notification", "content_management")
-workflow.add_edge("call_center", "content_management")
+workflow_builder.add_edge("notification", "content_management")
+workflow_builder.add_edge("call_center", "content_management")
 
 # Set the entry point to receptionist
-workflow.set_entry_point("receptionist")
+workflow_builder.set_entry_point("receptionist")
 
 # Compile the graph
-workflow.compile() 
+workflow = workflow_builder.compile() 

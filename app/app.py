@@ -32,8 +32,8 @@ def handle_transcription():
         # Initialize state with transcript
         initial_state = {"transcript": transcript, "patient_id": "demo_patient"}
         
-        # Run the workflow
-        final_state = workflow.run(initial_state)
+        # Run the workflow - in langgraph 0.3.1, we use invoke() instead of run()
+        final_state = workflow.invoke(initial_state)
         
         # Extract response from final state
         response = final_state.get("response", "I'm sorry, I couldn't process your request.")
