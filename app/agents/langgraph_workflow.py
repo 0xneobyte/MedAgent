@@ -1,12 +1,21 @@
 from langgraph.graph import StateGraph
+from typing import Dict, Any, TypedDict, List
 from app.agents.receptionist import receptionist_agent
 from app.agents.appointment import appointment_agent
 from app.agents.call_center import call_center_agent
 from app.agents.content_management import content_management_agent
 from app.agents.notification import notification_agent
 
+# Define a TypedDict for our state schema
+class WorkflowState(TypedDict):
+    transcript: str
+    intent: str
+    patient_id: str
+    response: str
+    appointment_details: Dict[str, Any]
+
 # Define the state flow for our agents
-workflow = StateGraph()
+workflow = StateGraph(state_schema=WorkflowState)
 
 # Add nodes for each agent
 workflow.add_node("receptionist", receptionist_agent)
