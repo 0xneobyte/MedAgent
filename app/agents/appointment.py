@@ -4,6 +4,7 @@ from langfuse.client import Langfuse
 import datetime
 import json
 import re
+from app.models import Patient, Doctor, Appointment
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -31,6 +32,21 @@ APPOINTMENTS = [
 def debug_log(message):
     """Helper function to print debug messages"""
     print(f"DEBUG: {message}")
+
+# Appointment booking states
+STATES = {
+    "INITIAL": "initial",
+    "COLLECTING_NAME": "collecting_name",
+    "COLLECTING_PHONE": "collecting_phone",
+    "COLLECTING_BIRTHDATE": "collecting_birthdate",
+    "COLLECTING_REASON": "collecting_reason",
+    "SUGGESTING_SPECIALTY": "suggesting_specialty",
+    "COLLECTING_DATE_TIME": "collecting_date_time",
+    "COLLECTING_EMAIL": "collecting_email",
+    "CONFIRMING": "confirming",
+    "COMPLETED": "completed",
+    "CANCELLED": "cancelled"
+}
 
 def parse_date_time(date_str, time_str):
     """
@@ -395,6 +411,204 @@ def extract_date_time_from_transcript(transcript):
     
     return date_str, time_str, action
 
+def extract_name(transcript):
+    """Extract patient name from transcript"""
+    # Simple extraction using GPT
+    system_prompt = """
+    You are a helpful assistant extracting a patient's name from their message.
+    Return ONLY the name without any additional text or explanation.
+    If you cannot determine a name, respond with "Unknown".
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ],
+        temperature=0.1,
+        max_tokens=50
+    )
+    
+    name = response.choices[0].message.content.strip()
+    if name.lower() == "unknown":
+        return None
+        
+    return name
+
+def extract_phone(transcript):
+    """Extract phone number from transcript"""
+    # Try regex first for common formats
+    phone_patterns = [
+        r'\b(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b',  # 123-456-7890, 123.456.7890, 123 456 7890
+        r'\b(\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4})\b',  # (123)-456-7890, (123).456.7890, (123) 456 7890
+        r'\b(\+\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b',  # +1-123-456-7890
+    ]
+    
+    for pattern in phone_patterns:
+        match = re.search(pattern, transcript)
+        if match:
+            # Remove non-numeric characters
+            phone = re.sub(r'\D', '', match.group(1))
+            return phone
+    
+    # If regex fails, try GPT extraction
+    system_prompt = """
+    You are a helpful assistant extracting a phone number from a message.
+    Return ONLY the phone number without any additional text or explanation.
+    Format the number as a continuous string of digits without spaces or special characters.
+    If you cannot determine a phone number, respond with "Unknown".
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ],
+        temperature=0.1,
+        max_tokens=20
+    )
+    
+    phone = response.choices[0].message.content.strip()
+    if phone.lower() == "unknown":
+        return None
+    
+    # Remove any non-numeric characters
+    phone = re.sub(r'\D', '', phone)
+    if len(phone) < 10:  # Ensure it's a valid phone number
+        return None
+        
+    return phone
+
+def extract_birthdate(transcript):
+    """Extract birthdate from transcript"""
+    # Try regex for common date formats
+    date_patterns = [
+        r'\b(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b',  # MM/DD/YYYY, DD/MM/YYYY
+        r'\b(\d{4}[-/]\d{1,2}[-/]\d{1,2})\b',  # YYYY/MM/DD
+        r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b'  # Month DD, YYYY
+    ]
+    
+    for pattern in date_patterns:
+        match = re.search(pattern, transcript, re.IGNORECASE)
+        if match:
+            try:
+                # Try to parse the date
+                date_str = match.group(1)
+                # Various parsing attempts based on format
+                for fmt in ["%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%m-%d-%Y", "%d-%m-%Y", "%Y-%m-%d"]:
+                    try:
+                        date_obj = datetime.datetime.strptime(date_str, fmt)
+                        # Return in YYYY-MM-DD format
+                        return date_obj.strftime("%Y-%m-%d")
+                    except ValueError:
+                        continue
+            except:
+                pass
+    
+    # If regex fails, try GPT extraction
+    system_prompt = """
+    You are a helpful assistant extracting a birthdate from a message.
+    Return ONLY the date in YYYY-MM-DD format without any additional text or explanation.
+    If you cannot determine a date, respond with "Unknown".
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ],
+        temperature=0.1,
+        max_tokens=20
+    )
+    
+    date = response.choices[0].message.content.strip()
+    if date.lower() == "unknown":
+        return None
+        
+    # Validate the date format
+    try:
+        datetime.datetime.strptime(date, "%Y-%m-%d")
+        return date
+    except ValueError:
+        return None
+
+def extract_email(transcript):
+    """Extract email from transcript"""
+    # Try regex for email format
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    match = re.search(email_pattern, transcript)
+    if match:
+        return match.group(0)
+    
+    # If regex fails, try GPT extraction
+    system_prompt = """
+    You are a helpful assistant extracting an email address from a message.
+    Return ONLY the email address without any additional text or explanation.
+    If you cannot determine an email address, respond with "Unknown".
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ],
+        temperature=0.1,
+        max_tokens=50
+    )
+    
+    email = response.choices[0].message.content.strip()
+    if email.lower() == "unknown" or not '@' in email:
+        return None
+        
+    return email
+
+def extract_reason(transcript):
+    """Extract reason for visit from transcript"""
+    system_prompt = """
+    You are a helpful assistant extracting a patient's reason for visiting a doctor from their message.
+    Return ONLY the reason without any additional text or explanation.
+    Be concise but informative, focusing on symptoms or health concerns.
+    If you cannot determine a reason, respond with "Consultation".
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ],
+        temperature=0.1,
+        max_tokens=100
+    )
+    
+    reason = response.choices[0].message.content.strip()
+    if reason.lower() == "unknown":
+        return "Consultation"
+        
+    return reason
+
+def validate_birthdate(birthdate):
+    """Validate birthdate format and ensure it's a past date"""
+    try:
+        date_obj = datetime.datetime.strptime(birthdate, "%Y-%m-%d")
+        today = datetime.datetime.now()
+        
+        # Check if date is in the past and not more than 120 years ago
+        if date_obj > today:
+            return False
+        
+        max_age = today - datetime.timedelta(days=365 * 120)
+        if date_obj < max_age:
+            return False
+            
+        return True
+    except ValueError:
+        return False
+
 def appointment_agent(state):
     """
     The main Appointment Agent function for LangGraph
@@ -418,224 +632,262 @@ def appointment_agent(state):
         # Extract relevant information from the state
         transcript = state.get("transcript", "")
         intent = state.get("intent", "")
-        patient_id = state.get("patient_id", "demo_patient")
         
         # Only process if the intent is appointment-related
         if "appointment" not in intent:
             state["response"] = "I'm not sure I understand what you need. Are you trying to schedule an appointment?"
             return state
         
-        # First try direct extraction from transcript
-        direct_date_str, direct_time_str, direct_action = extract_date_time_from_transcript(transcript)
+        # Initialize appointment context in the state if it doesn't exist
+        if "appointment_context" not in state:
+            state["appointment_context"] = {
+                "state": STATES["INITIAL"],
+                "patient_name": None,
+                "patient_phone": None,
+                "patient_email": None,
+                "patient_birthdate": None,
+                "appointment_reason": None,
+                "doctor_specialty": None,
+                "selected_doctor_id": None,
+                "appointment_date": None,
+                "appointment_time": None
+            }
         
-        debug_log(f"Direct extraction: date={direct_date_str}, time={direct_time_str}, action={direct_action}")
+        context = state["appointment_context"]
         
-        # If we got results from direct extraction, try to parse them
-        if direct_date_str and direct_time_str:
-            formatted_date, formatted_time = parse_date_time(direct_date_str, direct_time_str)
-            if formatted_date and formatted_time:
-                # We've successfully extracted and parsed the date/time
-                debug_log(f"Using directly extracted date/time: {formatted_date} at {formatted_time}")
-                # Set up appointment_data for the rest of the function
-                appointment_data = {
-                    "action": direct_action,
-                    "date": direct_date_str,
-                    "time": direct_time_str,
-                    "reason": "Consultation"  # Default reason
-                }
+        # Determine action based on current state
+        if context["state"] == STATES["INITIAL"]:
+            # Transition to name collection
+            context["state"] = STATES["COLLECTING_NAME"]
+            state["response"] = "I'd be happy to help you schedule an appointment. Could you please tell me your full name?"
+        
+        elif context["state"] == STATES["COLLECTING_NAME"]:
+            # Extract name from transcript
+            name = extract_name(transcript)
+            
+            if name:
+                context["patient_name"] = name
+                context["state"] = STATES["COLLECTING_PHONE"]
+                state["response"] = f"Thank you, {name}. Could you please provide your phone number?"
             else:
-                # Failed to parse the extracted date/time, fallback to GPT
-                debug_log("Direct extraction failed to parse, falling back to GPT")
-                appointment_data = None
-        else:
-            # Direct extraction didn't find date/time, fallback to GPT
-            debug_log("Direct extraction didn't find complete date/time, falling back to GPT")
-            appointment_data = None
+                state["response"] = "I need your full name to schedule an appointment. Could you please provide it?"
         
-        # If direct extraction failed, use GPT
-        if not appointment_data:
-            system_prompt = """
-            You are an AI appointment assistant for a healthcare clinic. Extract relevant appointment details
-            from the patient's request. The patient might provide the date and time in conversational format
-            like "Monday at 2pm" or "tomorrow afternoon".
+        elif context["state"] == STATES["COLLECTING_PHONE"]:
+            # Extract phone from transcript
+            phone = extract_phone(transcript)
             
-            Your task is to extract the INTENT of the patient and the key appointment details.
-            
-            For scheduling, provide this JSON format:
-            {"action": "schedule", "date": "[exact date mentioned or day of week]", "time": "[exact time mentioned]", "reason": "[reason for visit or 'Consultation' if not specified]"}
-            
-            For cancellation, provide this JSON format:
-            {"action": "cancel", "appointment_id": "ID or description of the appointment"}
-            
-            For rescheduling, provide this JSON format:
-            {"action": "reschedule", "appointment_id": "ID or description", "new_date": "[new date]", "new_time": "[new time]"}
-            
-            If the patient just wants to schedule an appointment but doesn't provide specifics, use:
-            {"action": "schedule", "date": null, "time": null, "reason": "Consultation"}
-            
-            If the patient provides a specific day like "Monday" or "next Tuesday", extract it exactly as mentioned.
-            If the patient provides a specific time like "2pm" or "afternoon", extract it exactly as mentioned.
-            
-            Only output valid JSON without additional text.
-            """
-            
-            # Create a Langfuse span directly without context manager
-            span = trace.span(name="gpt4_appointment_extraction")
-            
-            # Extract appointment details using GPT-4o
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": transcript}
-                ],
-                temperature=0.1
-            )
-            
-            try:
-                # Parse the JSON response
-                appointment_data = json.loads(response.choices[0].message.content)
-                debug_log(f"GPT extracted: {appointment_data}")
-                # Create a new span with metadata instead of adding metadata to existing span
-                trace.span(name="json_parsing", metadata={"extracted_data": appointment_data})
-            except json.JSONDecodeError:
-                # If not valid JSON, use a fallback
-                debug_log(f"JSON parse error: {response.choices[0].message.content}")
-                appointment_data = {"action": "incomplete", "missing": ["all fields"]}
-                # Create a new span with error metadata
-                trace.span(name="json_error", metadata={"json_error": response.choices[0].message.content})
-            
-            # End the original span
-            span.end()
+            if phone:
+                context["patient_phone"] = phone
+                context["state"] = STATES["COLLECTING_BIRTHDATE"]
+                state["response"] = "Thank you. Now, could you please share your date of birth in YYYY-MM-DD format?"
+            else:
+                state["response"] = "I need a valid phone number with at least 10 digits. Could you please provide it?"
         
-        # Handle based on the action
-        action = appointment_data.get("action", "")
+        elif context["state"] == STATES["COLLECTING_BIRTHDATE"]:
+            # Extract birthdate from transcript
+            birthdate = extract_birthdate(transcript)
+            
+            if birthdate and validate_birthdate(birthdate):
+                context["patient_birthdate"] = birthdate
+                context["state"] = STATES["COLLECTING_REASON"]
+                state["response"] = "Thank you. What's the reason for your visit today?"
+            else:
+                state["response"] = "I need a valid birth date in YYYY-MM-DD format (e.g., 1980-01-15). Could you please provide it?"
         
-        if action == "schedule":
-            date_str = appointment_data.get("date")
-            time_str = appointment_data.get("time")
-            reason = appointment_data.get("reason", "Consultation")
+        elif context["state"] == STATES["COLLECTING_REASON"]:
+            # Extract reason from transcript
+            reason = extract_reason(transcript)
             
-            debug_log(f"Processing schedule action with date={date_str}, time={time_str}")
+            if reason:
+                context["appointment_reason"] = reason
+                
+                # Determine the specialty based on the reason
+                specialty = Doctor.get_specialty_for_reason(reason)
+                context["doctor_specialty"] = specialty
+                context["state"] = STATES["SUGGESTING_SPECIALTY"]
+                
+                state["response"] = f"Based on your reason '{reason}', I recommend seeing a {specialty}. Would you like to proceed with this specialist, or would you prefer a different type of doctor?"
+            else:
+                state["response"] = "I need to know the reason for your visit. Could you please provide more details?"
+        
+        elif context["state"] == STATES["SUGGESTING_SPECIALTY"]:
+            # Check if user agrees with the suggested specialty
+            agreement_indicators = ["yes", "sure", "okay", "proceed", "that's fine", "sounds good"]
+            disagreement_indicators = ["no", "different", "other", "change", "another", "not that"]
             
-            # Handle natural language date/time
+            # Default to agreement if no clear indication
+            user_agrees = True
+            
+            for indicator in disagreement_indicators:
+                if indicator in transcript.lower():
+                    user_agrees = False
+                    break
+            
+            if not user_agrees:
+                # Try to extract a different specialty from the transcript
+                system_prompt = """
+                You are a helpful assistant extracting a medical specialty from a message.
+                Return ONLY the medical specialty without any additional text or explanation.
+                Examples: Cardiologist, Dermatologist, Neurologist, General Practitioner, etc.
+                If you cannot determine a specialty, respond with "General Practitioner".
+                """
+                
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": transcript}
+                    ],
+                    temperature=0.1,
+                    max_tokens=20
+                )
+                
+                specialty = response.choices[0].message.content.strip()
+                context["doctor_specialty"] = specialty
+            
+            # Find doctors of this specialty
+            doctors = Doctor.find_by_specialty(context["doctor_specialty"])
+            
+            if not doctors:
+                state["response"] = f"I'm sorry, but we don't have any {context['doctor_specialty']} available at the moment. Would you like to see a General Practitioner instead?"
+                context["doctor_specialty"] = "General Practitioner"
+            else:
+                # Select the first doctor for demo purposes
+                # In a real app, you would let the user choose
+                context["selected_doctor_id"] = doctors[0]["_id"]
+                context["state"] = STATES["COLLECTING_DATE_TIME"]
+                
+                # Get available dates for this doctor
+                available_dates = []
+                for date in doctors[0]["available_slots"]:
+                    if doctors[0]["available_slots"][date]:  # Check if there are slots available
+                        formatted_date = datetime.datetime.strptime(date, "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                        available_dates.append(f"{formatted_date}")
+                
+                dates_str = ", ".join(available_dates[:3])  # Limit to 3 dates for simplicity
+                
+                state["response"] = f"I've assigned you to {doctors[0]['name']}, {context['doctor_specialty']}. When would you like to schedule your appointment? We have availability on {dates_str}."
+        
+        elif context["state"] == STATES["COLLECTING_DATE_TIME"]:
+            # Extract date and time from transcript
+            date_str, time_str, _ = extract_date_time_from_transcript(transcript)
+            
             if date_str and time_str:
-                # Try to parse the natural language date and time
                 formatted_date, formatted_time = parse_date_time(date_str, time_str)
                 
                 if formatted_date and formatted_time:
-                    # Successfully parsed date and time
-                    date = formatted_date
-                    time = formatted_time
-                    debug_log(f"Successfully parsed to date={date}, time={time}")
-                else:
-                    # Parsing failed, just echo back what we got for clarity
-                    state["response"] = f"I'd be happy to schedule your appointment, but I need a specific date and time. Could you please provide when you'd like to come in?"
-                    return state
-            else:
-                # Missing required information
-                date = None
-                time = None
-            
-            if not date or not time:
-                # Missing required information
-                state["response"] = "I'd be happy to schedule an appointment for you. Could you please specify the date and time you prefer?"
-            else:
-                # Check available slots
-                available_slots = get_available_slots(date)
-                
-                if not available_slots:
-                    # No slots available on that date
-                    state["response"] = f"I'm sorry, but we don't have any available appointments on {date}. Would you like to try another date?"
-                elif time not in available_slots:
-                    # Requested time not available
-                    slots_str = ", ".join(available_slots)
-                    state["response"] = f"I'm sorry, but {time} is not available on {date}. We have the following slots available: {slots_str}. Would you like to book one of these?"
-                else:
-                    # Book the appointment
-                    appointment = book_appointment(patient_id, date, time, reason)
-                    if appointment:
-                        # Format the date for better display
-                        try:
-                            formatted_date = datetime.datetime.strptime(date, "%Y-%m-%d").strftime("%A, %B %d, %Y")
-                        except:
-                            formatted_date = date
-                            
-                        state["response"] = f"Great! I've booked your appointment for {formatted_date} at {time} with Dr. Smith for {reason}. Please arrive 15 minutes early to complete any necessary paperwork."
+                    # Get doctor object
+                    doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
+                                  if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                    
+                    if not doctor:
+                        state["response"] = "I'm sorry, there was an issue with the selected doctor. Let's start over."
+                        context["state"] = STATES["INITIAL"]
                     else:
-                        state["response"] = "I'm sorry, but I couldn't book your appointment. Please try again later."
-        
-        elif action == "cancel":
-            # For demo purposes, find the most recent appointment
-            patient_appointments = find_appointments(patient_id)
-            
-            if not patient_appointments:
-                state["response"] = "I don't see any appointments scheduled for you. Would you like to book a new appointment?"
-            else:
-                # Get the first appointment (simplification for demo)
-                appointment = patient_appointments[0]
-                
-                # Cancel the appointment
-                cancel_appointment(appointment["id"])
-                
-                # Format the date for better display
-                try:
-                    formatted_date = datetime.datetime.strptime(appointment["date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
-                except:
-                    formatted_date = appointment["date"]
-                    
-                state["response"] = f"I've canceled your appointment scheduled for {formatted_date} at {appointment['time']}. Is there anything else I can help you with?"
-        
-        elif action == "reschedule":
-            # For demo purposes, just use the first appointment
-            patient_appointments = find_appointments(patient_id)
-            
-            if not patient_appointments:
-                state["response"] = "I don't see any appointments scheduled for you. Would you like to book a new appointment?"
-            else:
-                # Get the first appointment (simplification for demo)
-                old_appointment = patient_appointments[0]
-                
-                # Get new date and time
-                new_date_str = appointment_data.get("new_date", old_appointment["date"])
-                new_time_str = appointment_data.get("new_time", old_appointment["time"])
-                
-                # Parse natural language date/time
-                parsed_date, parsed_time = parse_date_time(new_date_str, new_time_str)
-                new_date = parsed_date if parsed_date else old_appointment["date"]
-                new_time = parsed_time if parsed_time else old_appointment["time"]
-                
-                # Check if the new slot is available
-                available_slots = get_available_slots(new_date)
-                
-                if new_time not in available_slots:
-                    slots_str = ", ".join(available_slots)
-                    state["response"] = f"I'm sorry, but {new_time} is not available on {new_date}. We have the following slots available: {slots_str}. Would you like to book one of these?"
+                        # Check if slot is available
+                        available_slots = doctor.get("available_slots", {}).get(formatted_date, [])
+                        
+                        if formatted_time not in available_slots:
+                            slots_str = ", ".join(available_slots[:5])  # Limit to 5 slots for readability
+                            
+                            if slots_str:
+                                state["response"] = f"I'm sorry, but {formatted_time} is not available on that date. Available time slots are: {slots_str}. Would you like to choose one of these times?"
+                            else:
+                                state["response"] = f"I'm sorry, but there are no available slots on that date. Would you like to try another date?"
+                        else:
+                            context["appointment_date"] = formatted_date
+                            context["appointment_time"] = formatted_time
+                            context["state"] = STATES["COLLECTING_EMAIL"]
+                            
+                            state["response"] = "Great! Now, please provide your email address for the appointment confirmation."
                 else:
-                    # Cancel old appointment
-                    cancel_appointment(old_appointment["id"])
-                    
-                    # Book new appointment
-                    book_appointment(
-                        patient_id,
-                        new_date,
-                        new_time,
-                        old_appointment["reason"]
-                    )
-                    
-                    # Format the dates for better display
-                    try:
-                        formatted_old_date = datetime.datetime.strptime(old_appointment["date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
-                        formatted_new_date = datetime.datetime.strptime(new_date, "%Y-%m-%d").strftime("%A, %B %d, %Y")
-                    except:
-                        formatted_old_date = old_appointment["date"]
-                        formatted_new_date = new_date
-                    
-                    state["response"] = f"I've rescheduled your appointment from {formatted_old_date} at {old_appointment['time']} to {formatted_new_date} at {new_time}. Is there anything else I can help you with?"
+                    state["response"] = "I couldn't understand the date and time you provided. Could you please specify a date (e.g., Monday, tomorrow) and time (e.g., 2 PM, 14:00)?"
+            else:
+                state["response"] = "I need both a date and time for your appointment. Could you please provide them?"
+        
+        elif context["state"] == STATES["COLLECTING_EMAIL"]:
+            # Extract email from transcript
+            email = extract_email(transcript)
+            
+            if email:
+                context["patient_email"] = email
+                context["state"] = STATES["CONFIRMING"]
+                
+                # Format date for display
+                formatted_date = datetime.datetime.strptime(context["appointment_date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                
+                # Get doctor info
+                doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
+                              if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                
+                # Create confirmation message
+                confirmation = f"Please confirm your appointment details:\n"
+                confirmation += f"- Name: {context['patient_name']}\n"
+                confirmation += f"- Phone: {context['patient_phone']}\n"
+                confirmation += f"- Email: {context['patient_email']}\n"
+                confirmation += f"- Date of Birth: {context['patient_birthdate']}\n"
+                confirmation += f"- Doctor: {doctor['name']} ({context['doctor_specialty']})\n"
+                confirmation += f"- Date: {formatted_date}\n"
+                confirmation += f"- Time: {context['appointment_time']}\n"
+                confirmation += f"- Reason: {context['appointment_reason']}\n\n"
+                confirmation += "Is this information correct? Please say 'yes' to confirm or 'no' to make changes."
+                
+                state["response"] = confirmation
+            else:
+                state["response"] = "I need a valid email address for sending the appointment confirmation. Could you please provide it?"
+        
+        elif context["state"] == STATES["CONFIRMING"]:
+            # Check if user confirms
+            if "yes" in transcript.lower() or "confirm" in transcript.lower() or "correct" in transcript.lower():
+                # Save patient information
+                patient_id = Patient.create(
+                    name=context["patient_name"],
+                    phone=context["patient_phone"],
+                    email=context["patient_email"],
+                    birthdate=context["patient_birthdate"]
+                )
+                
+                # Book the appointment
+                appointment_id = Appointment.create(
+                    patient_id=patient_id,
+                    doctor_id=context["selected_doctor_id"],
+                    date=context["appointment_date"],
+                    time=context["appointment_time"],
+                    reason=context["appointment_reason"]
+                )
+                
+                # Format date for display
+                formatted_date = datetime.datetime.strptime(context["appointment_date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                
+                # Get doctor info
+                doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
+                              if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                
+                context["state"] = STATES["COMPLETED"]
+                
+                # Success response
+                state["response"] = f"Great! I've booked your appointment with {doctor['name']} for {formatted_date} at {context['appointment_time']}. A confirmation email has been sent to {context['patient_email']}. Please arrive 15 minutes early to complete any necessary paperwork."
+                
+                # Store appointment details in state for notification agent
+                state["appointment_details"] = {
+                    "patient_name": context["patient_name"],
+                    "patient_email": context["patient_email"],
+                    "doctor_name": doctor["name"],
+                    "doctor_specialty": context["doctor_specialty"],
+                    "date": context["appointment_date"],
+                    "formatted_date": formatted_date,
+                    "time": context["appointment_time"],
+                    "reason": context["appointment_reason"]
+                }
+            else:
+                # Go back to initial state
+                state["response"] = "No problem, let's start over with your appointment booking. What would you like to do?"
+                context["state"] = STATES["INITIAL"]
         
         else:
-            # Incomplete information
-            state["response"] = "I'd like to help you with your appointment, but I need a bit more information. Could you please specify whether you want to schedule, reschedule, or cancel an appointment?"
+            # Default response for other states
+            state["response"] = "I'm here to help with your appointment. What would you like to do?"
+            context["state"] = STATES["INITIAL"]
         
         trace.update(status="success")
         

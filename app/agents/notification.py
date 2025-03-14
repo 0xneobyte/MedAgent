@@ -2,7 +2,6 @@ import os
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from langfuse.client import Langfuse
-import datetime
 
 # Initialize Langfuse for logging
 langfuse = Langfuse(
@@ -11,31 +10,30 @@ langfuse = Langfuse(
     host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 )
 
-# For demo purposes, we'll simulate email sending
-def send_email(to_email, subject, content):
+def send_email(to_email, subject, html_content):
     """
     Send an email using SendGrid
     
     Args:
         to_email: The recipient's email address
         subject: The email subject
-        content: The HTML content of the email
+        html_content: The HTML content of the email
     
     Returns:
         bool: True if the email was sent successfully, False otherwise
     """
-    # For demo, log but don't actually send
+    # Log the email (for demo purposes)
     print(f"Would send email to {to_email} with subject: {subject}")
-    print(f"Content: {content}")
+    print(f"Content: \n{html_content}\n")
     
-    # In production, we would use SendGrid to send the email
+    # Only try to send a real email if SendGrid API key is available
     if os.getenv("SENDGRID_API_KEY"):
         try:
             message = Mail(
-                from_email=os.getenv("FROM_EMAIL", "clinic@example.com"),
+                from_email=os.getenv("FROM_EMAIL", "noreply@medagent.example.com"),
                 to_emails=to_email,
                 subject=subject,
-                html_content=content
+                html_content=html_content
             )
             
             sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
@@ -45,30 +43,28 @@ def send_email(to_email, subject, content):
         except Exception as e:
             print(f"Error sending email: {e}")
             return False
-    
-    # In demo mode, always return success
-    return True
+    else:
+        # For demo purposes, just pretend it worked
+        return True
 
-def create_appointment_confirmation_email(appointment):
+def create_appointment_confirmation_email(appointment_details):
     """
-    Create an email message for appointment confirmation
+    Create the HTML content for an appointment confirmation email
     
     Args:
-        appointment: Dictionary containing appointment details
+        appointment_details: A dictionary with appointment information
     
     Returns:
-        tuple: (subject, content) for the email
+        str: The HTML content of the email
     """
-    # Format the date for better display
-    try:
-        date_obj = datetime.datetime.strptime(appointment["date"], "%Y-%m-%d")
-        formatted_date = date_obj.strftime("%A, %B %d, %Y")
-    except:
-        formatted_date = appointment["date"]
+    patient_name = appointment_details.get("patient_name", "Patient")
+    formatted_date = appointment_details.get("formatted_date", "")
+    time = appointment_details.get("time", "")
+    doctor_name = appointment_details.get("doctor_name", "Doctor")
+    doctor_specialty = appointment_details.get("doctor_specialty", "")
+    reason = appointment_details.get("reason", "Consultation")
     
-    subject = "Your Appointment Confirmation"
-    
-    content = f"""
+    html_content = f"""
     <html>
         <body>
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 5px;">
@@ -76,13 +72,13 @@ def create_appointment_confirmation_email(appointment):
                     <h2>Appointment Confirmation</h2>
                 </div>
                 <div style="padding: 20px;">
-                    <p>Dear Patient,</p>
+                    <p>Dear {patient_name},</p>
                     <p>Your appointment has been scheduled for:</p>
                     <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #4b6cb7; margin: 15px 0;">
                         <p><strong>Date:</strong> {formatted_date}</p>
-                        <p><strong>Time:</strong> {appointment["time"]}</p>
-                        <p><strong>Provider:</strong> {appointment["doctor"]}</p>
-                        <p><strong>Reason:</strong> {appointment["reason"]}</p>
+                        <p><strong>Time:</strong> {time}</p>
+                        <p><strong>Provider:</strong> {doctor_name} ({doctor_specialty})</p>
+                        <p><strong>Reason:</strong> {reason}</p>
                     </div>
                     <p>Please arrive 15 minutes before your appointment time to complete any necessary paperwork.</p>
                     <p>If you need to reschedule or cancel, please call our office at (555) 123-4567 at least 24 hours before your appointment.</p>
@@ -97,7 +93,7 @@ def create_appointment_confirmation_email(appointment):
     </html>
     """
     
-    return subject, content
+    return html_content
 
 def notification_agent(state):
     """
@@ -109,10 +105,6 @@ def notification_agent(state):
     Returns:
         dict: Updated state with notification information
     """
-    # Check if this is an appointment-related intent that requires notification
-    if "schedule_appointment" not in state.get("intent", "") and "appointment" not in state.get("intent", ""):
-        return state
-    
     # Create a trace in Langfuse
     trace = langfuse.trace(
         name="notification_agent",
@@ -122,54 +114,43 @@ def notification_agent(state):
     )
     
     try:
-        # This is a simplified version for the demo
-        # In a real system, we would extract the appointment details from the state
-        # and send a proper notification to the patient
+        # Check if this is an appointment-related intent
+        intent = state.get("intent", "")
         
-        # For demo purposes, we'll create a mock appointment
-        appointment = {
-            "id": "appt123",
-            "patient_id": state.get("patient_id", "demo_patient"),
-            "date": datetime.datetime.now().strftime("%Y-%m-%d"),
-            "time": "14:00",
-            "doctor": "Dr. Smith",
-            "reason": "Consultation"
-        }
-        
-        # Create the email content
-        subject, content = create_appointment_confirmation_email(appointment)
-        
-        # In a real system, we would get the patient's email from the database
-        # For demo, we'll use a placeholder
-        patient_email = "patient@example.com"
-        
-        # Create a Langfuse span without using context manager
-        span = trace.span(name="send_email_notification")
-        
-        # Send the email
-        success = send_email(patient_email, subject, content)
-        
-        # Create a new span with the email metadata
-        trace.span(
-            name="email_result",
-            metadata={
-                "email_sent": success,
-                "recipient": patient_email,
-                "subject": subject
-            }
-        )
-        
-        # End the original span
-        span.end()
-        
-        # Record the notification in the state
-        state["notification_sent"] = success
+        if "appointment" in intent and "appointment_details" in state:
+            # Get appointment details from state
+            appointment_details = state["appointment_details"]
+            
+            # Create a span to track email sending
+            email_span = trace.span(name="email_notification")
+            
+            # Get recipient email
+            to_email = appointment_details.get("patient_email", "patient@example.com")
+            
+            # Create email subject and content
+            subject = "Your Appointment Confirmation"
+            html_content = create_appointment_confirmation_email(appointment_details)
+            
+            # Send the email
+            email_sent = send_email(to_email, subject, html_content)
+            
+            # Log the result
+            trace.span(
+                name="email_result",
+                metadata={
+                    "email_sent": email_sent,
+                    "recipient": to_email
+                }
+            )
+            
+            # End the email span
+            email_span.end()
         
         trace.update(status="success")
-    
+        
     except Exception as e:
         trace.update(status="error", error={"message": str(e)})
         print(f"Error in notification agent: {e}")
-        state["notification_sent"] = False
     
+    # The notification agent doesn't modify the response
     return state 

@@ -13,12 +13,48 @@ class WorkflowState(TypedDict):
     patient_id: str
     response: str
     appointment_details: Dict[str, Any]
+    conversation_in_progress: bool
+    original_intent: str
+
+# Wrap the receptionist agent to preserve intent
+def receptionist_agent_wrapper(state):
+    """
+    Wrapper around receptionist_agent that preserves intent for ongoing conversations
+    """
+    # Print received state for debugging
+    print(f"DEBUG WORKFLOW: Processing state with transcript: '{state.get('transcript', '')}'")
+    print(f"DEBUG WORKFLOW: Initial state: {state}")
+    
+    # Check if we're in an ongoing appointment conversation
+    if state.get("conversation_in_progress") and state.get("original_intent"):
+        # If we're in a conversation, preserve the original intent
+        print(f"DEBUG WORKFLOW: Preserving original intent: {state.get('original_intent')}")
+        
+        # First let the receptionist do its job
+        updated_state = receptionist_agent(state)
+        
+        # Then override the intent with the original intent
+        updated_state["intent"] = state.get("original_intent")
+        print(f"DEBUG WORKFLOW: Overriding intent to: {updated_state['intent']}")
+        
+        return updated_state
+    else:
+        # Not in a conversation yet, let receptionist process normally
+        updated_state = receptionist_agent(state)
+        
+        # If this is a new appointment intent, mark the conversation as in progress
+        if "appointment" in updated_state.get("intent", ""):
+            print(f"DEBUG WORKFLOW: Setting conversation_in_progress=True for appointment intent")
+            updated_state["conversation_in_progress"] = True
+            updated_state["original_intent"] = updated_state.get("intent")
+        
+        return updated_state
 
 # Define the state flow for our agents with state_schema
 workflow_builder = StateGraph(state_schema=WorkflowState)
 
-# Add nodes for each agent
-workflow_builder.add_node("receptionist", receptionist_agent)
+# Add nodes for each agent - use our wrapper for receptionist
+workflow_builder.add_node("receptionist", receptionist_agent_wrapper)
 workflow_builder.add_node("appointment", appointment_agent)
 workflow_builder.add_node("call_center", call_center_agent)
 workflow_builder.add_node("content_management", content_management_agent)
@@ -28,6 +64,9 @@ workflow_builder.add_node("notification", notification_agent)
 # The receptionist is the entry point and routes based on intent
 def route_by_intent(state):
     intent = state.get("intent", "")
+    
+    # For debugging
+    print(f"DEBUG WORKFLOW: Routing based on intent: {intent}")
     
     if "appointment" in intent:
         return "appointment"
@@ -58,4 +97,17 @@ workflow_builder.add_edge("call_center", "content_management")
 workflow_builder.set_entry_point("receptionist")
 
 # Compile the graph
-workflow = workflow_builder.compile() 
+workflow = workflow_builder.compile()
+
+# Wrapper function for the workflow to initialize state properly
+def process_workflow(input_state):
+    """
+    Process the workflow with proper state initialization
+    """
+    # Initialize conversation tracking if not present
+    if "conversation_in_progress" not in input_state:
+        input_state["conversation_in_progress"] = False
+    if "original_intent" not in input_state:
+        input_state["original_intent"] = ""
+    
+    return workflow.invoke(input_state) 

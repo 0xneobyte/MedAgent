@@ -1,6 +1,7 @@
 import os
 import io
 import tempfile
+import re
 from openai import OpenAI
 from langfuse.client import Langfuse
 
@@ -13,6 +14,10 @@ langfuse = Langfuse(
     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
     host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 )
+
+def debug_log(message):
+    """Helper function to print debug messages"""
+    print(f"DEBUG RECEPTIONIST: {message}")
 
 def transcribe_audio(audio_file):
     """
@@ -63,6 +68,49 @@ def transcribe_audio(audio_file):
         print(f"Error transcribing audio: {e}")
         return "Sorry, I couldn't understand the audio."
 
+def detect_appointment_intent(transcript):
+    """
+    Check if a transcript contains words suggesting an appointment intent
+    
+    Args:
+        transcript: The transcribed text from the user
+    
+    Returns:
+        bool: True if appointment-related intent is detected, False otherwise
+    """
+    appointment_keywords = [
+        'appointment', 'schedule', 'book', 'reserve', 'visit', 
+        'doctor', 'clinic', 'consultation', 'checkup', 'check-up',
+        'reschedule', 'cancel', 'change', 'see a doctor', 'medical',
+        'meet with', 'consult', 'slot'
+    ]
+    
+    # Check for time-related patterns which often indicate appointment booking
+    time_patterns = [
+        r'\d{1,2}\s*(?::|\.)\s*\d{2}',  # 2:30, 14:00, 2.30
+        r'\d{1,2}\s*(?:am|pm|a\.m\.|p\.m\.)',  # 2pm, 2 pm, 2a.m., 2 p.m.
+        r'(?:morning|afternoon|evening|night)',  # morning, afternoon, etc.
+        r'(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'  # days
+    ]
+    
+    # Convert transcript to lowercase for case-insensitive matching
+    transcript_lower = transcript.lower()
+    
+    # Check for appointment keywords
+    for keyword in appointment_keywords:
+        if keyword in transcript_lower:
+            debug_log(f"Appointment intent detected via keyword: {keyword}")
+            return True
+    
+    # Check for time patterns
+    for pattern in time_patterns:
+        if re.search(pattern, transcript_lower):
+            if any(word in transcript_lower for word in ['book', 'schedule', 'appointment', 'visit', 'see', 'doctor', 'clinic']):
+                debug_log(f"Appointment intent detected via time pattern: {pattern}")
+                return True
+    
+    return False
+
 def process_query(transcript):
     """
     Process the transcript and identify the intent
@@ -73,6 +121,13 @@ def process_query(transcript):
     Returns:
         dict: A dictionary containing the intent and other details
     """
+    debug_log(f"Processing transcript: '{transcript}'")
+    
+    # First, check for appointment intent directly to avoid misclassification
+    if detect_appointment_intent(transcript):
+        debug_log("Direct appointment intent detection succeeded")
+        return "schedule_appointment"
+    
     # Create a trace in Langfuse
     trace = langfuse.trace(
         name="intent_classification",
@@ -84,11 +139,15 @@ def process_query(transcript):
         You are an AI assistant for a healthcare clinic. Your task is to identify the intent 
         of the patient's query and classify it into one of the following categories:
         
-        1. schedule_appointment - If the patient wants to book, reschedule, or cancel an appointment.
+        1. schedule_appointment - If the patient wants to book, reschedule, or cancel an appointment,
+           or mentions anything about meeting with a doctor or visiting the clinic at a specific time.
         2. general_inquiry - If the patient is asking about clinic hours, services, or general information.
         3. health_question - If the patient is asking about medical advice or symptoms.
         4. emergency - If the patient describes an emergency situation.
         5. other - For any other type of query.
+        
+        IMPORTANT: If the patient mentions anything about booking, scheduling, or needing an appointment,
+        or if they mention a specific date or time in relation to seeing a doctor, ALWAYS classify as schedule_appointment.
         
         Respond with ONLY the intent category as a single word.
         """
@@ -104,6 +163,7 @@ def process_query(transcript):
         )
         
         intent = response.choices[0].message.content.strip().lower()
+        debug_log(f"GPT intent classification result: {intent}")
         
         # Create a span with metadata directly in the constructor
         trace.span(
@@ -116,7 +176,10 @@ def process_query(transcript):
     
     except Exception as e:
         trace.update(status="error", error={"message": str(e)})
-        print(f"Error processing query: {e}")
+        debug_log(f"Error in intent classification: {str(e)}")
+        # Return schedule_appointment as a fallback if the query has appointment-like keywords
+        if "appointment" in transcript.lower() or "book" in transcript.lower() or "schedule" in transcript.lower():
+            return "schedule_appointment"
         return "unknown"
 
 def receptionist_agent(state):
@@ -132,8 +195,12 @@ def receptionist_agent(state):
     # Extract the transcript from the state
     transcript = state.get("transcript", "")
     
+    debug_log(f"Receptionist agent received transcript: '{transcript}'")
+    
     # Process the query to identify intent
     intent = process_query(transcript)
+    
+    debug_log(f"Final intent classification: {intent}")
     
     # Update the state with the intent
     state["intent"] = intent
