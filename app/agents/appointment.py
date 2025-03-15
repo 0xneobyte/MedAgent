@@ -6,6 +6,7 @@ import json
 import re
 from app.models import Patient, Doctor, Appointment, patients_collection, doctors_collection
 import random
+from dateutil import parser
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -230,25 +231,122 @@ def parse_date_time(date_str, time_str):
         debug_log(f"Error parsing date/time: {e}")
         return None, None
 
-def get_available_slots(date):
+def get_available_slots(date_str):
     """
     Get available appointment slots for a given date
     
     Args:
-        date: The date to check for available slots
+        date_str: Date string in format YYYY-MM-DD
     
     Returns:
-        list: A list of available time slots
+        list: List of available time slots
     """
-    # In a real system, this would query a database
-    # For this demo, we'll return fixed slots
-    all_slots = ["09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"]
+    debug_log(f"Getting available slots for date: {date_str}")
     
-    # Remove slots that are already booked
-    booked_slots = [appt["time"] for appt in APPOINTMENTS if appt["date"] == date]
-    available_slots = [slot for slot in all_slots if slot not in booked_slots]
-    
-    return available_slots
+    try:
+        # Parse the date 
+        date_obj = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        
+        # Check if the date is in the past or too far in the future
+        today = datetime.datetime.now().date()
+        target_date = date_obj.date()
+        
+        if target_date < today:
+            debug_log(f"Date {date_str} is in the past")
+            return []
+        
+        if target_date > today + datetime.timedelta(days=90):
+            debug_log(f"Date {date_str} is too far in the future (>90 days)")
+            return []
+        
+        # Check if there are any doctors with available slots on this date
+        available_doctors = list(doctors_collection.find(
+            {f"available_slots.{date_str}": {"$exists": True}}
+        ))
+        
+        debug_log(f"Found {len(available_doctors)} doctors with availability on {date_str}")
+        
+        if not available_doctors:
+            # If no doctors have explicit availability, use the fallback slots
+            # Standard office hours (skipping weekends)
+            if date_obj.weekday() >= 5:  # Saturday (5) or Sunday (6)
+                debug_log(f"No slots available on weekends unless explicitly set")
+                return []
+                
+            all_slots = [
+                "9:00 AM", "9:30 AM", "10:00 AM", "10:30 AM", 
+                "11:00 AM", "11:30 AM", "1:00 PM", "1:30 PM",
+                "2:00 PM", "2:30 PM", "3:00 PM", "3:30 PM", 
+                "4:00 PM", "4:30 PM"
+            ]
+        else:
+            # Collect slots from all available doctors
+            all_slots = set()
+            for doctor in available_doctors:
+                # Check doctor's available slots for this date
+                doctor_slots = doctor.get("available_slots", {}).get(date_str, [])
+                for slot in doctor_slots:
+                    # Convert DB slot format to display format
+                    try:
+                        # Handle different time formats
+                        if ":" in slot:
+                            hour, minute = slot.split(":")
+                            hour = int(hour)
+                            # Convert 24h to 12h format
+                            if hour >= 12:
+                                period = "PM"
+                                if hour > 12:
+                                    hour -= 12
+                            else:
+                                period = "AM"
+                                if hour == 0:
+                                    hour = 12
+                            formatted_slot = f"{hour}:{minute} {period}"
+                        else:
+                            # Handle format like "10"
+                            hour = int(slot)
+                            if hour >= 12:
+                                period = "PM"
+                                if hour > 12:
+                                    hour -= 12
+                            else:
+                                period = "AM"
+                                if hour == 0:
+                                    hour = 12
+                            formatted_slot = f"{hour}:00 {period}"
+                            
+                        all_slots.add(formatted_slot)
+                    except Exception as e:
+                        debug_log(f"Error formatting time slot {slot}: {e}")
+            
+            all_slots = list(all_slots)
+        
+        # Check existing appointments for this date and remove booked slots
+        booked_slots = []
+        try:
+            # Query MongoDB for appointments on this date
+            appointments_for_date = list(appointments_collection.find({"date": date_str, "status": {"$nin": ["cancelled"]}}))
+            
+            # Extract the times that are already booked
+            booked_slots = [appointment["time"] for appointment in appointments_for_date]
+            debug_log(f"Found {len(booked_slots)} existing appointments for {date_str}")
+        except Exception as e:
+            debug_log(f"Error checking existing appointments: {e}")
+        
+        # Remove booked slots from available slots
+        available_slots = [slot for slot in all_slots if slot not in booked_slots]
+        
+        # Sort the slots by time
+        try:
+            available_slots.sort(key=lambda x: datetime.datetime.strptime(x, "%I:%M %p"))
+        except Exception as e:
+            debug_log(f"Error sorting time slots: {e}")
+        
+        debug_log(f"Available slots for {date_str}: {available_slots}")
+        return available_slots
+    except Exception as e:
+        debug_log(f"Error getting available slots: {e}")
+        return []
 
 def book_appointment(patient_id, date, time, reason):
     """
@@ -958,6 +1056,159 @@ def extract_appointment_id(transcript):
         debug_log(f"Error in GPT appointment ID extraction: {e}")
         return None
 
+def extract_date_time_action(transcript):
+    """
+    Extract date, time, and action from a transcript
+    
+    Args:
+        transcript: User input text
+    
+    Returns:
+        dict: Result containing success status, extracted date/time values, and message if applicable
+    """
+    debug_log(f"Extracting date/time/action from: '{transcript}'")
+    try:
+        # First try with GPT extraction
+        date_str, time_str, action = extract_date_time_gpt(transcript)
+        debug_log(f"GPT extraction: date={date_str}, time={time_str}, action={action}")
+        
+        if not date_str and not time_str:
+            return {
+                "success": False,
+                "message": "I couldn't understand the date and time. Please specify a clear date and time, like 'March 20 at 2pm'."
+            }
+        
+        # If we have a date, ensure it's in YYYY-MM-DD format
+        if date_str:
+            try:
+                # Parse the date string to ensure it's valid
+                parsed_date = parser.parse(date_str)
+                date_str = parsed_date.strftime("%Y-%m-%d")
+                debug_log(f"Parsed date to: {date_str}")
+            except Exception as e:
+                debug_log(f"Error parsing date '{date_str}': {e}")
+                return {
+                    "success": False,
+                    "message": f"I had trouble understanding the date '{date_str}'. Please provide a date in a clear format like 'March 20, 2025'."
+                }
+        else:
+            return {
+                "success": False,
+                "message": "I couldn't identify a date in your message. Please specify when you'd like to schedule your appointment."
+            }
+        
+        # If we have time, convert to standard format
+        if time_str:
+            # Normalize time to standard display format (e.g., "2:00 PM")
+            try:
+                parsed_time = parser.parse(time_str)
+                time_str = parsed_time.strftime("%-I:%M %p")
+                debug_log(f"Parsed time to: {time_str}")
+            except Exception as e:
+                debug_log(f"Error parsing time '{time_str}': {e}")
+                return {
+                    "success": False,
+                    "message": f"I had trouble understanding the time '{time_str}'. Please provide a time in a clear format like '2:30 PM'."
+                }
+        else:
+            return {
+                "success": False,
+                "message": "I couldn't identify a time in your message. Please specify what time you'd like for your appointment."
+            }
+        
+        return {
+            "success": True,
+            "date": date_str,
+            "time": time_str,
+            "action": action
+        }
+        
+    except Exception as e:
+        debug_log(f"Error in extract_date_time_action: {e}")
+        return {
+            "success": False,
+            "message": "I had trouble understanding your request. Please specify a date and time for your appointment clearly."
+        }
+
+def get_doctor_available_slots(doctor_id, date_str):
+    """
+    Get available appointment slots for a specific doctor on a given date
+    
+    Args:
+        doctor_id: The doctor's ID
+        date_str: Date string in format YYYY-MM-DD
+    
+    Returns:
+        list: List of available time slots for this doctor
+    """
+    debug_log(f"Getting available slots for doctor {doctor_id} on date: {date_str}")
+    
+    try:
+        # Get the doctor from the database
+        doctor = doctors_collection.find_one({"_id": doctor_id})
+        if not doctor:
+            debug_log(f"Doctor not found with ID: {doctor_id}")
+            return []
+            
+        debug_log(f"Found doctor: {doctor.get('name', 'Unknown')}")
+        
+        # Check if doctor has slots for this date
+        available_slots = []
+        if "available_slots" in doctor and date_str in doctor["available_slots"]:
+            # Get raw slots from doctor's schedule
+            raw_slots = doctor["available_slots"][date_str]
+            debug_log(f"Raw slots from doctor's schedule: {raw_slots}")
+            
+            # Format slots for display
+            for slot in raw_slots:
+                try:
+                    # Convert database format to display format
+                    if ":" in slot:
+                        hour, minute = slot.split(":")
+                        hour = int(hour)
+                    else:
+                        hour = int(slot)
+                        minute = "00"
+                        
+                    # Convert to 12-hour format
+                    if hour >= 12:
+                        period = "PM"
+                        display_hour = hour - 12 if hour > 12 else hour
+                    else:
+                        period = "AM"
+                        display_hour = hour if hour > 0 else 12
+                        
+                    formatted_slot = f"{display_hour}:{minute} {period}"
+                    available_slots.append(formatted_slot)
+                except Exception as e:
+                    debug_log(f"Error formatting slot {slot}: {e}")
+        else:
+            debug_log(f"No slots found for date {date_str} in doctor's schedule")
+        
+        # Check existing appointments for this doctor on this date
+        appointments = appointments_collection.find({
+            "doctor_id": doctor_id,
+            "date": date_str,
+            "status": {"$nin": ["cancelled"]}
+        })
+        
+        # Extract booked slots
+        booked_slots = [appointment["time"] for appointment in appointments]
+        debug_log(f"Booked slots: {booked_slots}")
+        
+        # Remove booked slots
+        available_slots = [slot for slot in available_slots if slot not in booked_slots]
+        
+        # Sort by time
+        available_slots.sort(key=lambda x: datetime.datetime.strptime(x, "%I:%M %p"))
+        
+        debug_log(f"Available slots after removing booked ones: {available_slots}")
+        return available_slots
+        
+    except Exception as e:
+        debug_log(f"Error getting doctor's available slots: {e}")
+        return []
+
 def appointment_agent(state):
     """
     The main Appointment Agent function for LangGraph
@@ -1264,7 +1515,7 @@ def appointment_agent(state):
         elif context["state"] == STATES["COLLECTING_DATE_TIME"]:
             # Extract date and time from transcript using GPT
             debug_log(f"Processing date/time collection from transcript: '{transcript}'")
-            formatted_date, formatted_time, action = extract_date_time_gpt(transcript)
+            formatted_date, formatted_time, action = extract_date_time_action(transcript)
             debug_log(f"Extracted date: {formatted_date}, time: {formatted_time}, action: {action}")
             
             if formatted_date and formatted_time:
@@ -1575,7 +1826,8 @@ def appointment_agent(state):
                     # Get more details about the appointment
                     try:
                         patient = patients_collection.find_one({"_id": appointment["patient_id"]})
-                        doctor = doctors_collection.find_one({"_id": appointment["doctor_id"]})
+                        doctor_id = appointment["doctor_id"]
+                        doctor = doctors_collection.find_one({"_id": doctor_id})
                         
                         # Format date for display
                         formatted_date = datetime.datetime.strptime(appointment["date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
@@ -1584,17 +1836,55 @@ def appointment_agent(state):
                         context["reschedule_appointment_id"] = appointment_id
                         context["reschedule_appointment"] = {
                             "doctor_name": doctor["name"] if doctor else "Unknown Doctor",
-                            "doctor_id": appointment["doctor_id"],
+                            "doctor_id": doctor_id,
                             "formatted_date": formatted_date,
                             "date": appointment["date"],
                             "time": appointment["time"],
                             "patient_name": patient["name"] if patient else "Unknown Patient"
                         }
                         
+                        # Check if doctor has available slots
+                        today = datetime.datetime.now().date()
+                        available_dates = []
+                        
+                        # Check next 10 days for available slots
+                        for i in range(1, 11):
+                            check_date = today + datetime.timedelta(days=i)
+                            check_date_str = check_date.strftime("%Y-%m-%d")
+                            
+                            # Get slots specifically for this doctor
+                            slots = get_doctor_available_slots(doctor_id, check_date_str)
+                            
+                            if slots:
+                                formatted_check_date = check_date.strftime("%A, %B %d")
+                                available_dates.append({
+                                    "date": check_date_str,
+                                    "formatted_date": formatted_check_date,
+                                    "slots": slots
+                                })
+                                if len(available_dates) >= 3:  # Show next 3 available dates
+                                    break
+                        
                         # Move to date/time collection step
                         context["state"] = STATES["RESCHEDULING_DATE_TIME"]
-                        reschedule_context = context["reschedule_appointment"]
-                        state["response"] = get_step_prompt("rescheduling_date_time", reschedule_context)
+                        context["available_dates"] = available_dates
+                        
+                        # Prepare response with appointment details and available slots
+                        doctor_name = doctor["name"] if doctor else "Unknown Doctor"
+                        response = f"I've found your current appointment on {formatted_date} at {appointment['time']} with {doctor_name}. "
+                        
+                        if available_dates:
+                            response += f"Here are available time slots with {doctor_name}:\n\n"
+                            for date_info in available_dates:
+                                response += f"{date_info['formatted_date']}: {', '.join(date_info['slots'][:5])}"
+                                if len(date_info['slots']) > 5:
+                                    response += f" and {len(date_info['slots']) - 5} more"
+                                response += "\n"
+                            response += "\nPlease select a date and time for your new appointment."
+                        else:
+                            response += f"I'm sorry, but {doctor_name} doesn't have any available slots in the next 10 days. Please call our office to check for other options."
+                        
+                        state["response"] = response
                     except Exception as e:
                         debug_log(f"Error getting appointment details: {e}")
                         state["response"] = "I'm sorry, but I encountered an error retrieving your appointment details. Please try again."
@@ -1603,6 +1893,144 @@ def appointment_agent(state):
             else:
                 state["response"] = "I couldn't identify an appointment ID in your message. Please provide your appointment ID in the format MA-##### (e.g., MA-00001)."
                 
+        elif context["state"] == STATES["RESCHEDULING_DATE_TIME"]:
+            # Extract date and time from transcript
+            debug_log(f"Processing rescheduling date/time from transcript: '{transcript}'")
+            
+            # Get the doctor information
+            doctor_id = context["reschedule_appointment"]["doctor_id"]
+            doctor_name = context["reschedule_appointment"]["doctor_name"]
+            
+            # Extract date and time
+            date_time_result = extract_date_time_action(transcript)
+            debug_log(f"Date time extraction result: {date_time_result}")
+            
+            if date_time_result.get("success"):
+                date_str = date_time_result["date"]
+                time_str = date_time_result["time"]
+                
+                # Verify the slot is available for this specific doctor
+                doctor_slots = get_doctor_available_slots(doctor_id, date_str)
+                
+                if time_str in doctor_slots:
+                    # We found a valid slot - save it for confirmation
+                    context["new_appointment_date"] = date_str
+                    context["new_appointment_time"] = time_str
+                    
+                    # Format dates for display
+                    old_date = context["reschedule_appointment"]["date"]
+                    old_time = context["reschedule_appointment"]["time"]
+                    old_formatted_date = context["reschedule_appointment"]["formatted_date"]
+                    new_formatted_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                    
+                    # Move to confirmation
+                    context["state"] = STATES["RESCHEDULING_CONFIRMING"]
+                    
+                    # Prepare confirmation
+                    confirmation_context = {
+                        "doctor_name": doctor_name,
+                        "old_date": old_formatted_date,
+                        "old_time": old_time,
+                        "new_date": new_formatted_date,
+                        "new_time": time_str
+                    }
+                    
+                    state["response"] = f"I'm rescheduling your appointment with {doctor_name} from {old_formatted_date} at {old_time} to {new_formatted_date} at {time_str}. Is this correct? Please confirm by saying 'yes' or 'no'."
+                else:
+                    # Time not available for this doctor
+                    if doctor_slots:
+                        state["response"] = f"I'm sorry, but {time_str} is not available with {doctor_name} on {date_str}. Available times include: {', '.join(doctor_slots[:5])}" + (f" and {len(doctor_slots) - 5} more" if len(doctor_slots) > 5 else "") + ". Please select one of these times."
+                    else:
+                        # No slots at all for this doctor on this date
+                        available_dates = context.get("available_dates", [])
+                        if available_dates:
+                            response = f"I'm sorry, but {doctor_name} has no available slots on {date_str}. Here are the available dates:\n\n"
+                            for date_info in available_dates:
+                                response += f"{date_info['formatted_date']}: {', '.join(date_info['slots'][:5])}"
+                                if len(date_info['slots']) > 5:
+                                    response += f" and {len(date_info['slots']) - 5} more"
+                                response += "\n"
+                            state["response"] = response
+                        else:
+                            state["response"] = f"I'm sorry, but {doctor_name} has no available slots on {date_str}. Please select a different date."
+            else:
+                # Couldn't extract date or time
+                state["response"] = date_time_result.get("message", "I couldn't understand the date and time you specified. Please try again with a clear date and time.")
+        
+        elif context["state"] == STATES["RESCHEDULING_CONFIRMING"]:
+            # Check if user confirms
+            confirmation = "yes" in transcript.lower() or "confirm" in transcript.lower() or "correct" in transcript.lower()
+            
+            if confirmation:
+                try:
+                    # Get necessary information from context
+                    appointment_id = context["reschedule_appointment_id"]
+                    new_date = context["new_appointment_date"]
+                    new_time = context["new_appointment_time"]
+                    
+                    # Reschedule the appointment
+                    success = Appointment.reschedule(appointment_id, new_date, new_time)
+                    
+                    if success:
+                        # Format dates for display
+                        new_formatted_date = datetime.datetime.strptime(new_date, "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                        doctor_name = context["reschedule_appointment"]["doctor_name"]
+                        patient_name = context["reschedule_appointment"]["patient_name"]
+                        
+                        # Try to get patient email for notification
+                        patient_email = None
+                        try:
+                            # Get the appointment to find the patient
+                            appointment = Appointment.find_by_appointment_id(appointment_id)
+                            if appointment and appointment.get("patient_id"):
+                                # Look up the patient to get their email
+                                patient = patients_collection.find_one({"_id": appointment["patient_id"]})
+                                if patient and patient.get("email"):
+                                    patient_email = patient["email"]
+                                    debug_log(f"Found patient email for rescheduling notification: {patient_email}")
+                        except Exception as e:
+                            debug_log(f"Error retrieving patient email: {e}")
+                        
+                        # Update the intent to indicate rescheduling
+                        state["intent"] = "reschedule_appointment"
+                        
+                        # Store rescheduling details for notification
+                        reschedule_details = {
+                            "appointment_id": appointment_id,
+                            "patient_name": patient_name,
+                            "patient_email": patient_email,
+                            "doctor_name": doctor_name,
+                            "old_date": context["reschedule_appointment"]["date"],
+                            "old_time": context["reschedule_appointment"]["time"],
+                            "new_date": new_date,
+                            "new_time": new_time,
+                            "formatted_new_date": new_formatted_date
+                        }
+                        
+                        # Add to state for notification agent
+                        state["reschedule_details"] = reschedule_details
+                        
+                        # Add to appointment_context for persistence
+                        if "appointment_context" not in state:
+                            state["appointment_context"] = {}
+                        state["appointment_context"]["reschedule_details"] = reschedule_details
+                        
+                        # Success response
+                        state["response"] = f"Great! I've rescheduled your appointment with {doctor_name} to {new_formatted_date} at {new_time}. A confirmation email will be sent to you. Is there anything else I can help you with today?"
+                        
+                        # Reset state for next interaction
+                        context["state"] = STATES["INITIAL"]
+                    else:
+                        state["response"] = "I'm sorry, but I couldn't reschedule your appointment. Please call our office for assistance."
+                except Exception as e:
+                    debug_log(f"Error rescheduling appointment: {e}")
+                    state["response"] = "I encountered an error while trying to reschedule your appointment. Please try again or contact our office directly."
+                    context["state"] = STATES["INITIAL"]
+            else:
+                # User didn't confirm, go back to date/time collection
+                state["response"] = "No problem. Please provide a different date and time for your appointment."
+                context["state"] = STATES["RESCHEDULING_DATE_TIME"]
+        
         else:
             # Default response for other states
             state["response"] = "I'm here to help with your appointment. What would you like to do?"
@@ -1724,8 +2152,8 @@ def test_extractions():
             r'\b(19\d{2}|20\d{2})[-/\.](0?[1-9]|1[0-2])[-/\.](0?[1-9]|[12][0-9]|3[01])\b',
             r'\b(0?[1-9]|1[0-2])[-/\.](0?[1-9]|[12][0-9]|3[01])[-/\.](19\d{2}|20\d{2})\b',
             r'\b(0?[1-9]|[12][0-9]|3[01])[-/\.](0?[1-9]|1[0-2])[-/\.](19\d{2}|20\d{2})\b',
-            r'\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(0?[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th)?,?\s+(19\d{2}|20\d{2})\b',
-            r'\b(0?[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th)?\s+(?:of\s+)?(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?,?\s+(19\d{2}|20\d{2})\b'
+            r'\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(0?[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th)?,?\s+(\d{4})\b',
+            r'\b(0?[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th)?\s+(?:of\s+)?(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?,?\s+(\d{4})\b'
         ]
         
         month_to_num = {

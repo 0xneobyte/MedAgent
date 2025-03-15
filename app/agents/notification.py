@@ -183,6 +183,103 @@ def create_cancellation_confirmation_email(cancellation_details):
     
     return html_content
 
+def create_reschedule_confirmation_email(reschedule_details):
+    """
+    Create a HTML email for appointment rescheduling confirmation
+    
+    Args:
+        reschedule_details: Dictionary containing details of the rescheduled appointment
+    
+    Returns:
+        str: HTML content of the email
+    """
+    # Unpack details (with defaults for safety)
+    appointment_id = reschedule_details.get("appointment_id", "Unknown")
+    patient_name = reschedule_details.get("patient_name", "Patient")
+    doctor_name = reschedule_details.get("doctor_name", "Doctor")
+    old_date = reschedule_details.get("old_date", "Unknown")
+    old_time = reschedule_details.get("old_time", "Unknown")
+    new_date = reschedule_details.get("formatted_new_date", reschedule_details.get("new_date", "Unknown"))
+    new_time = reschedule_details.get("new_time", "Unknown")
+    
+    # Generate cancellation email HTML
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <title>Appointment Rescheduled</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333;
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                .header {{
+                    background-color: #4a69bd;
+                    color: white;
+                    padding: 15px;
+                    text-align: center;
+                    border-radius: 5px 5px 0 0;
+                }}
+                .content {{
+                    padding: 20px;
+                    border: 1px solid #ddd;
+                    border-top: none;
+                    border-radius: 0 0 5px 5px;
+                }}
+                .footer {{
+                    text-align: center;
+                    margin-top: 20px;
+                    font-size: 0.8em;
+                    color: #666;
+                }}
+                .highlight {{
+                    font-weight: bold;
+                    color: #4a69bd;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h2>Appointment Rescheduled</h2>
+            </div>
+            <div class="content">
+                <p>Dear {patient_name},</p>
+                
+                <p>This email confirms that your appointment has been <span class="highlight">rescheduled</span>.</p>
+                
+                <p><strong>Previous Appointment:</strong><br>
+                Date: {old_date}<br>
+                Time: {old_time}<br>
+                Doctor: {doctor_name}<br>
+                Appointment ID: {appointment_id}</p>
+                
+                <p><strong>New Appointment:</strong><br>
+                Date: {new_date}<br>
+                Time: {new_time}<br>
+                Doctor: {doctor_name}<br>
+                Appointment ID: {appointment_id}</p>
+                
+                <p>If you need to make any changes to your appointment, please contact us at (555) 123-4567 or reply to this email.</p>
+                
+                <p>Thank you for choosing our medical services.</p>
+                
+                <p>Best regards,<br>
+                Medical Office Staff</p>
+            </div>
+            <div class="footer">
+                <p>This is an automated message, please do not reply directly.</p>
+                <p>© 2023 Medical Office. All rights reserved.</p>
+            </div>
+        </body>
+    </html>
+    """
+    
+    return html_content
+
 def notification_agent(state):
     """
     The main Notification Agent function for LangGraph
@@ -227,6 +324,25 @@ def notification_agent(state):
             # Also add to root state for consistency
             state["cancellation_details"] = cancellation_details
         
+        # Check if we have rescheduling details
+        reschedule_details = None
+        has_reschedule_details = False
+        
+        # Try to get rescheduling details from direct state
+        if "reschedule_details" in state:
+            reschedule_details = state["reschedule_details"]
+            has_reschedule_details = True
+            print(f"Found rescheduling details directly in state")
+        
+        # If not in direct state, check appointment_context
+        elif "appointment_context" in state and "reschedule_details" in state["appointment_context"]:
+            reschedule_details = state["appointment_context"]["reschedule_details"]
+            has_reschedule_details = True
+            print(f"Found rescheduling details in appointment_context")
+            
+            # Also add to root state for consistency
+            state["reschedule_details"] = reschedule_details
+        
         # Log whether we found cancellation details
         if has_cancellation_details:
             print(f"Cancellation details: {cancellation_details}")
@@ -236,86 +352,88 @@ def notification_agent(state):
                 intent = "cancel_appointment"
                 state["intent"] = "cancel_appointment"
         
+        # Log whether we found rescheduling details
+        if has_reschedule_details:
+            print(f"Rescheduling details: {reschedule_details}")
+            # Force intent to reschedule_appointment if we have rescheduling details
+            if intent != "reschedule_appointment":
+                print(f"Overriding intent from {intent} to reschedule_appointment due to reschedule_details")
+                intent = "reschedule_appointment"
+                state["intent"] = "reschedule_appointment"
+        
         # Check if this is a new appointment intent
         if intent in ["schedule_appointment", "book_appointment"] and "appointment_details" in state:
-            print(f"Processing appointment booking notification...")
-            # Get appointment details from state
             appointment_details = state["appointment_details"]
-            print(f"Appointment details: {appointment_details}")
+            patient_email = appointment_details.get("patient_email")
             
-            # Create a span to track email sending
-            email_span = trace.span(name="email_notification")
-            
-            # Get recipient email
-            to_email = appointment_details.get("patient_email", "patient@example.com")
-            
-            # Create email subject and content
-            subject = "Your Appointment Confirmation"
-            html_content = create_appointment_confirmation_email(appointment_details)
-            
-            # Send the email
-            email_sent = send_email(to_email, subject, html_content)
-            
-            # Log the result
-            trace.span(
-                name="email_result",
-                metadata={
-                    "email_sent": email_sent,
-                    "recipient": to_email
-                }
-            )
-            
-            # End the email span
-            email_span.end()
-        
-        # Check if this is a cancellation intent
-        elif intent == "cancel_appointment" and has_cancellation_details:
-            print(f"Processing cancellation notification...")
-            print(f"Cancellation details: {cancellation_details}")
-            
-            # Create a span to track email sending
-            email_span = trace.span(name="cancellation_email_notification")
-            
-            # Get recipient email (might be None if cancelling without contact info collection)
-            to_email = cancellation_details.get("patient_email")
-            
-            # If we don't have an email, try to get it from another source or use a default
-            if not to_email:
-                # Try to look up the patient's email if we have enough info
-                # For now, just use a placeholder
-                to_email = "patient@example.com"
-                print(f"No email found in cancellation details, using default: {to_email}")
+            if patient_email:
+                print(f"Sending appointment confirmation email to {patient_email}")
+                # Create email content
+                email_content = create_appointment_confirmation_email(appointment_details)
+                
+                # Send email
+                send_email(
+                    to_email=patient_email,
+                    subject="Your Appointment Confirmation",
+                    html_content=email_content
+                )
+                
+                state["notification_sent"] = True
             else:
-                print(f"Using email from cancellation details: {to_email}")
+                print(f"No email address found for appointment confirmation")
+                state["notification_sent"] = False
+                
+        # Handle cancellation email
+        elif intent == "cancel_appointment" and has_cancellation_details:
+            patient_email = cancellation_details.get("patient_email")
             
-            # Create email subject and content
-            subject = "Your Appointment Cancellation Confirmation"
-            html_content = create_cancellation_confirmation_email(cancellation_details)
+            if patient_email:
+                print(f"Sending cancellation confirmation email to {patient_email}")
+                # Create email content
+                email_content = create_cancellation_confirmation_email(cancellation_details)
+                
+                # Send email
+                send_email(
+                    to_email=patient_email,
+                    subject="Your Appointment Cancellation Confirmation",
+                    html_content=email_content
+                )
+                
+                state["notification_sent"] = True
+            else:
+                print(f"No email address found for cancellation confirmation")
+                state["notification_sent"] = False
+                
+        # Handle rescheduling email
+        elif intent == "reschedule_appointment" and has_reschedule_details:
+            patient_email = reschedule_details.get("patient_email")
             
-            # Send the email
-            email_sent = send_email(to_email, subject, html_content)
-            print(f"Cancellation email sent: {email_sent}")
-            
-            # Log the result
-            trace.span(
-                name="cancellation_email_result",
-                metadata={
-                    "email_sent": email_sent,
-                    "recipient": to_email
-                }
-            )
-            
-            # End the email span
-            email_span.end()
+            if patient_email:
+                print(f"Sending rescheduling confirmation email to {patient_email}")
+                # Create email content
+                email_content = create_reschedule_confirmation_email(reschedule_details)
+                
+                # Send email
+                send_email(
+                    to_email=patient_email,
+                    subject="Your Appointment Reschedule Confirmation",
+                    html_content=email_content
+                )
+                
+                state["notification_sent"] = True
+            else:
+                print(f"No email address found for rescheduling confirmation")
+                state["notification_sent"] = False
         else:
-            print(f"No email notification needed for intent: {intent}")
+            # No notification needed or not enough info
+            print(f"No notification sent - no matching intent or details")
+            state["notification_sent"] = False
         
-        trace.update(status="success")
         print(f"======= NOTIFICATION AGENT END =======")
-        
+        trace.update(status="success")
     except Exception as e:
-        trace.update(status="error", error={"message": str(e)})
         print(f"Error in notification agent: {e}")
+        trace.update(status="error", error={"message": str(e)})
+        state["notification_sent"] = False
     
-    # The notification agent doesn't modify the response
     return state 

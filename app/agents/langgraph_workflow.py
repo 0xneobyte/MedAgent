@@ -35,12 +35,12 @@ def receptionist_agent_wrapper(state):
         updated_state = receptionist_agent(state)
         
         # Then override the intent with the original intent
-        # UNLESS it's a cancellation update from the appointment agent
-        if updated_state.get("intent") != "cancel_appointment":
+        # UNLESS it's a cancellation or rescheduling update from the appointment agent
+        if updated_state.get("intent") not in ["cancel_appointment", "reschedule_appointment"]:
             updated_state["intent"] = state.get("original_intent")
             print(f"DEBUG WORKFLOW: Overriding intent to: {updated_state['intent']}")
         else:
-            print(f"DEBUG WORKFLOW: Detected cancellation intent, not overriding")
+            print(f"DEBUG WORKFLOW: Detected special intent {updated_state.get('intent')}, not overriding")
         
         return updated_state
     else:
@@ -48,8 +48,8 @@ def receptionist_agent_wrapper(state):
         updated_state = receptionist_agent(state)
         
         # If this is a new appointment intent, mark the conversation as in progress
-        if updated_state.get("intent") in ["schedule_appointment", "book_appointment"]:
-            print(f"DEBUG WORKFLOW: Setting conversation_in_progress=True for appointment intent")
+        if updated_state.get("intent") in ["schedule_appointment", "cancel_appointment", "reschedule_appointment"]:
+            print(f"DEBUG WORKFLOW: New {updated_state.get('intent')} conversation detected, marking as in progress")
             updated_state["conversation_in_progress"] = True
             updated_state["original_intent"] = updated_state.get("intent")
         
@@ -73,7 +73,8 @@ def route_by_intent(state):
     # For debugging
     print(f"DEBUG WORKFLOW: Routing based on intent: {intent}")
     
-    if intent in ["schedule_appointment", "book_appointment", "cancel_appointment"]:
+    if intent in ["schedule_appointment", "book_appointment", "cancel_appointment", "reschedule_appointment"]:
+        print(f"DEBUG WORKFLOW: Routing to appointment agent for {intent}")
         return "appointment"
     elif intent == "general_inquiry":
         return "call_center"

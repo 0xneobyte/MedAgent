@@ -78,37 +78,70 @@ def detect_appointment_intent(transcript):
     Returns:
         bool: True if appointment-related intent is detected, False otherwise
     """
-    appointment_keywords = [
-        'appointment', 'schedule', 'book', 'reserve', 'visit', 
-        'doctor', 'clinic', 'consultation', 'checkup', 'check-up',
-        'reschedule', 'cancel', 'change', 'see a doctor', 'medical',
-        'meet with', 'consult', 'slot'
+    # Convert to lowercase and strip punctuation for simple pattern matching
+    text = transcript.lower()
+    
+    # Keywords related to appointment scheduling
+    schedule_keywords = [
+        'appoint', 'book', 'schedule', 'see a doctor', 'see the doctor', 
+        'come in', 'visit', 'consultation', 'check-up', 'checkup'
     ]
     
-    # Check for time-related patterns which often indicate appointment booking
-    time_patterns = [
-        r'\d{1,2}\s*(?::|\.)\s*\d{2}',  # 2:30, 14:00, 2.30
-        r'\d{1,2}\s*(?:am|pm|a\.m\.|p\.m\.)',  # 2pm, 2 pm, 2a.m., 2 p.m.
-        r'(?:morning|afternoon|evening|night)',  # morning, afternoon, etc.
-        r'(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'  # days
-    ]
-    
-    # Convert transcript to lowercase for case-insensitive matching
-    transcript_lower = transcript.lower()
-    
-    # Check for appointment keywords
-    for keyword in appointment_keywords:
-        if keyword in transcript_lower:
-            debug_log(f"Appointment intent detected via keyword: {keyword}")
+    # Check for keywords in the text
+    for keyword in schedule_keywords:
+        if keyword in text:
             return True
     
-    # Check for time patterns
-    for pattern in time_patterns:
-        if re.search(pattern, transcript_lower):
-            if any(word in transcript_lower for word in ['book', 'schedule', 'appointment', 'visit', 'see', 'doctor', 'clinic']):
-                debug_log(f"Appointment intent detected via time pattern: {pattern}")
-                return True
+    # Check for time- or date-related patterns
+    date_time_patterns = [
+        r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+        r'\b(tomorrow|today|next week)\b',
+        r'\b\d{1,2}:\d{2}\b',  # time format like 9:30
+        r'\b\d{1,2} (am|pm)\b',  # time format like 10 am
+        r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\b'
+    ]
     
+    for pattern in date_time_patterns:
+        if re.search(pattern, text):
+            return True
+    
+    return False
+
+def detect_reschedule_intent(transcript):
+    """
+    Specifically check for rescheduling intent in the transcript
+    
+    Args:
+        transcript: The transcribed text from the user
+    
+    Returns:
+        bool: True if rescheduling intent is detected, False otherwise
+    """
+    # Convert to lowercase for easier matching
+    text = transcript.lower()
+    
+    # Keywords specifically related to rescheduling
+    reschedule_keywords = [
+        'reschedule', 'change appointment', 'move appointment', 
+        'change my appointment', 'move my appointment', 'change the time',
+        'different time', 'different date', 'new time', 'new date', 
+        'another time', 'another date', 'postpone'
+    ]
+    
+    # Check for reschedule-specific keywords
+    for keyword in reschedule_keywords:
+        if keyword in text:
+            return True
+            
+    # Check for intent that combines scheduling words with change words
+    schedule_words = ['appointment', 'visit', 'meeting', 'consultation']
+    change_words = ['change', 'move', 'switch', 'reschedule']
+    
+    for s_word in schedule_words:
+        for c_word in change_words:
+            if s_word in text and c_word in text:
+                return True
+                
     return False
 
 def process_query(transcript):
@@ -123,7 +156,12 @@ def process_query(transcript):
     """
     debug_log(f"Processing transcript: '{transcript}'")
     
-    # First, check for appointment intent directly to avoid misclassification
+    # First, check for rescheduling intent specifically
+    if detect_reschedule_intent(transcript):
+        debug_log("Detected reschedule intent")
+        return "reschedule_appointment"
+    
+    # Then check for general appointment intent
     if detect_appointment_intent(transcript):
         debug_log("Direct appointment intent detection succeeded")
         return "schedule_appointment"
@@ -139,15 +177,19 @@ def process_query(transcript):
         You are an AI assistant for a healthcare clinic. Your task is to identify the intent 
         of the patient's query and classify it into one of the following categories:
         
-        1. schedule_appointment - If the patient wants to book, reschedule, or cancel an appointment,
+        1. schedule_appointment - If the patient wants to book a new appointment
            or mentions anything about meeting with a doctor or visiting the clinic at a specific time.
-        2. general_inquiry - If the patient is asking about clinic hours, services, or general information.
-        3. health_question - If the patient is asking about medical advice or symptoms.
-        4. emergency - If the patient describes an emergency situation.
-        5. other - For any other type of query.
+        2. reschedule_appointment - If the patient wants to change, move, or reschedule an existing appointment.
+        3. cancel_appointment - If the patient wants to cancel an existing appointment.
+        4. general_inquiry - If the patient is asking about clinic hours, services, or general information.
+        5. health_question - If the patient is asking about medical advice or symptoms.
+        6. emergency - If the patient describes an emergency situation.
+        7. other - For any other type of query.
         
-        IMPORTANT: If the patient mentions anything about booking, scheduling, or needing an appointment,
-        or if they mention a specific date or time in relation to seeing a doctor, ALWAYS classify as schedule_appointment.
+        IMPORTANT DISTINCTIONS:
+        - If they mention booking or scheduling a NEW appointment, classify as schedule_appointment
+        - If they mention CHANGING or MOVING an EXISTING appointment, classify as reschedule_appointment
+        - If they mention CANCELING an appointment, classify as cancel_appointment
         
         Respond with ONLY the intent category as a single word.
         """
@@ -159,7 +201,8 @@ def process_query(transcript):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": transcript}
             ],
-            temperature=0.1
+            temperature=0.1,
+            max_tokens=50
         )
         
         intent = response.choices[0].message.content.strip().lower()
@@ -177,9 +220,21 @@ def process_query(transcript):
     except Exception as e:
         trace.update(status="error", error={"message": str(e)})
         debug_log(f"Error in intent classification: {str(e)}")
+        
+        # Check for rescheduling keywords as a fallback
+        if "reschedule" in transcript.lower() or "change appointment" in transcript.lower() or "move appointment" in transcript.lower():
+            debug_log("Detected rescheduling intent in fallback")
+            return "reschedule_appointment"
+        # Check for cancellation keywords
+        elif "cancel" in transcript.lower() or "cancelation" in transcript.lower():
+            debug_log("Detected cancellation intent in fallback")
+            return "cancel_appointment"
         # Return schedule_appointment as a fallback if the query has appointment-like keywords
-        if "appointment" in transcript.lower() or "book" in transcript.lower() or "schedule" in transcript.lower():
+        elif "appointment" in transcript.lower() or "book" in transcript.lower() or "schedule" in transcript.lower():
+            debug_log("Detected general appointment intent in fallback")
             return "schedule_appointment"
+        
+        debug_log("No specific intent detected, returning unknown")
         return "unknown"
 
 def receptionist_agent(state):
