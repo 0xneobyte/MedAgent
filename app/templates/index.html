@@ -169,6 +169,58 @@
         display: none;
       }
 
+      .tts-button {
+        background-color: #3b5998;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 48px;
+        height: 48px;
+        font-size: 18px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        margin-left: 10px;
+      }
+
+      .tts-button:hover {
+        background-color: #2d4373;
+        transform: scale(1.05);
+      }
+
+      .tts-button.active {
+        background-color: #4caf50;
+      }
+
+      .tts-button.loading {
+        position: relative;
+        pointer-events: none;
+      }
+
+      .tts-button.loading::after {
+        content: "";
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        top: 50%;
+        left: 50%;
+        margin-top: -8px;
+        margin-left: -8px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-top-color: white;
+        animation: tts-loading-spinner 0.8s linear infinite;
+      }
+
+      @keyframes tts-loading-spinner {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
       @keyframes pulse {
         0% {
           transform: scale(1);
@@ -262,6 +314,27 @@
               <line x1="8" y1="23" x2="16" y2="23"></line>
             </svg>
           </button>
+          <button
+            class="tts-button"
+            id="tts-button"
+            title="Toggle text-to-speech"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -274,11 +347,91 @@
       document.addEventListener("DOMContentLoaded", function () {
         // Get DOM elements
         const micButton = document.getElementById("mic-button");
+        const ttsButton = document.getElementById("tts-button");
         const statusBox = document.getElementById("status-box");
         const chatMessages = document.getElementById("chat-messages");
         const listeningIndicator = document.getElementById(
           "listening-indicator"
         );
+
+        // Track the currently playing audio element
+        let currentAudio = null;
+
+        // Check if TTS is stored in localStorage and apply setting
+        const ttsEnabled = localStorage.getItem("tts-enabled") === "true";
+        if (ttsEnabled) {
+          ttsButton.classList.add("active");
+        }
+
+        // Function to speak text using ElevenLabs API
+        function speak(text) {
+          // Only speak if TTS is enabled
+          if (localStorage.getItem("tts-enabled") !== "true") return;
+
+          // Stop any currently playing audio
+          if (currentAudio) {
+            currentAudio.pause();
+            currentAudio = null;
+          }
+
+          // Show loading indicator on the TTS button
+          ttsButton.classList.add("loading");
+
+          // Call our backend endpoint that interfaces with ElevenLabs
+          fetch("/api/tts", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              text: text,
+              voice_id: "cgSgspJ2msm6clMCkdW9", // Jessica voice
+            }),
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}`);
+              }
+              return response.blob();
+            })
+            .then((blob) => {
+              // Create audio from the blob
+              const audioUrl = URL.createObjectURL(blob);
+              const audio = new Audio(audioUrl);
+
+              // Store reference to current audio
+              currentAudio = audio;
+
+              // Set up event listeners
+              audio.addEventListener("ended", () => {
+                // Clean up when audio finishes
+                URL.revokeObjectURL(audioUrl);
+                currentAudio = null;
+              });
+
+              audio.addEventListener("error", (e) => {
+                console.error("Audio playback error:", e);
+                URL.revokeObjectURL(audioUrl);
+                currentAudio = null;
+              });
+
+              // Play the audio
+              audio.play().catch((e) => {
+                console.error("Error playing audio:", e);
+              });
+
+              // Remove loading indicator
+              ttsButton.classList.remove("loading");
+            })
+            .catch((error) => {
+              console.error("Error with TTS:", error);
+              ttsButton.classList.remove("loading");
+
+              // Fallback to browser TTS if ElevenLabs fails
+              const utterance = new SpeechSynthesisUtterance(text);
+              window.speechSynthesis.speak(utterance);
+            });
+        }
 
         // Function to add a message to the chat
         function addMessage(text, isUser) {
@@ -289,7 +442,31 @@
           messageDiv.textContent = text;
           chatMessages.appendChild(messageDiv);
           chatMessages.scrollTop = chatMessages.scrollHeight;
+
+          // If it's an assistant message, speak it
+          if (!isUser) {
+            speak(text);
+          }
         }
+
+        // Add click event to TTS button
+        ttsButton.addEventListener("click", function () {
+          const isEnabled = ttsButton.classList.toggle("active");
+          localStorage.setItem("tts-enabled", isEnabled);
+
+          // Announce status change
+          if (isEnabled) {
+            speak(
+              "Text-to-speech is now enabled using ElevenLabs AI voice technology."
+            );
+          } else {
+            // Stop any currently playing audio
+            if (currentAudio) {
+              currentAudio.pause();
+              currentAudio = null;
+            }
+          }
+        });
 
         // Function to start recording audio
         function startRecording() {
@@ -449,6 +626,14 @@
             sendText();
           }
         });
+
+        // Ensure voices are loaded (needed for some browsers)
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+          window.speechSynthesis.onvoiceschanged = function () {
+            const voices = window.speechSynthesis.getVoices();
+            console.log("Voices loaded:", voices.length);
+          };
+        }
       });
     </script>
   </body>

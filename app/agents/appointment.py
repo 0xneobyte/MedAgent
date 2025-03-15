@@ -54,7 +54,8 @@ STATES = {
     "CANCELLING_CONFIRMING": "cancelling_confirming",
     "RESCHEDULING_COLLECTING_ID": "rescheduling_collecting_id",
     "RESCHEDULING_DATE_TIME": "rescheduling_date_time",
-    "RESCHEDULING_CONFIRMING": "rescheduling_confirming"
+    "RESCHEDULING_CONFIRMING": "rescheduling_confirming",
+    "SCHEDULING_DATE_TIME": "scheduling_date_time"
 }
 
 def parse_date_time(date_str, time_str):
@@ -1073,6 +1074,23 @@ def extract_date_time_action(transcript):
         date_str, time_str, action = extract_date_time_gpt(transcript)
         debug_log(f"GPT extraction: date={date_str}, time={time_str}, action={action}")
         
+        # If we only have a date but no time, return partial success and ask for time
+        if date_str and not time_str:
+            try:
+                # Parse the date string to ensure it's valid
+                parsed_date = parser.parse(date_str)
+                date_str = parsed_date.strftime("%Y-%m-%d")
+                debug_log(f"Parsed date to: {date_str}")
+                
+                return {
+                    "success": False,
+                    "date": date_str,
+                    "need_time": True,
+                    "message": f"I have the date ({parsed_date.strftime('%A, %B %d, %Y')}), but what time would you prefer for your appointment?"
+                }
+            except Exception as e:
+                debug_log(f"Error parsing date '{date_str}': {e}")
+        
         if not date_str and not time_str:
             return {
                 "success": False,
@@ -1126,6 +1144,8 @@ def extract_date_time_action(transcript):
         
     except Exception as e:
         debug_log(f"Error in extract_date_time_action: {e}")
+        import traceback
+        debug_log(f"Traceback: {traceback.format_exc()}")
         return {
             "success": False,
             "message": "I had trouble understanding your request. Please specify a date and time for your appointment clearly."
@@ -1552,58 +1572,154 @@ def appointment_agent(state):
                 
                 # Get available dates for this doctor
                 available_dates = []
+                available_dates_with_slots = []
+                
                 for date in doctors[0]["available_slots"]:
                     if doctors[0]["available_slots"][date]:  # Check if there are slots available
                         formatted_date = datetime.datetime.strptime(date, "%Y-%m-%d").strftime("%A, %B %d, %Y")
-                        available_dates.append(f"{formatted_date}")
+                        available_dates.append(formatted_date)
+                        
+                        # Get the actual time slots for this date
+                        doctor_slots = get_doctor_available_slots(str(doctors[0]["_id"]), date)
+                        
+                        available_dates_with_slots.append({
+                            "date": date,
+                            "formatted_date": formatted_date,
+                            "slots": doctor_slots
+                        })
                 
+                # Store in context for later use
+                context["available_dates"] = available_dates_with_slots[:3]  # Limit to 3 dates
+                
+                # Format dates for the initial response
                 dates_str = ", ".join(available_dates[:3])  # Limit to 3 dates for simplicity
                 
-                state["response"] = f"I've assigned you to {doctors[0]['name']}, {context['doctor_specialty']}. When would you like to schedule your appointment? We have availability on {dates_str}."
+                # Create response with both dates and time slots
+                response = f"I've assigned you to {doctors[0]['name']}, {context['doctor_specialty']}. When would you like to schedule your appointment? We have availability on {dates_str}.\n\n"
+                
+                # Add time slots information
+                response += "Here are the available time slots:\n"
+                
+                for date_info in available_dates_with_slots[:3]:
+                    response += f"\n📅 {date_info['formatted_date']}:\n"
+                    
+                    # Group time slots by morning/afternoon
+                    morning_slots = [slot for slot in date_info['slots'] if "AM" in slot]
+                    afternoon_slots = [slot for slot in date_info['slots'] if "PM" in slot]
+                    
+                    if morning_slots:
+                        response += f"Morning: • {' • '.join(morning_slots)}\n"
+                    
+                    if afternoon_slots:
+                        response += f"Afternoon: • {' • '.join(afternoon_slots)}\n"
+                
+                state["response"] = response
         
         elif context["state"] == STATES["COLLECTING_DATE_TIME"]:
             # Extract date and time from transcript using GPT
             debug_log(f"Processing date/time collection from transcript: '{transcript}'")
-            formatted_date, formatted_time, action = extract_date_time_action(transcript)
-            debug_log(f"Extracted date: {formatted_date}, time: {formatted_time}, action: {action}")
             
-            if formatted_date and formatted_time:
-                # Get doctor object
-                try:
-                    doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
-                                  if str(d["_id"]) == str(context["selected_doctor_id"])), None)
-                    debug_log(f"Found doctor: {doctor['name'] if doctor else None}")
-                except Exception as e:
-                    debug_log(f"Error finding doctor: {e}")
-                    doctor = None
+            # Get the doctor information
+            doctor_id = context.get("selected_doctor_id")
+            
+            try:
+                doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
+                              if str(d["_id"]) == str(doctor_id)), None)
+                debug_log(f"Found doctor: {doctor['name'] if doctor else None}")
+                doctor_name = doctor["name"] if doctor else "the doctor"
+            except Exception as e:
+                debug_log(f"Error finding doctor: {e}")
+                doctor = None
+                doctor_name = "the doctor"
+                
+            # Use the improved date/time extraction
+            date_time_result = extract_date_time_action(transcript)
+            debug_log(f"Date time extraction result: {date_time_result}")
+            
+            # Special case: If we got a date but need time
+            if not date_time_result.get("success") and date_time_result.get("need_time") and date_time_result.get("date"):
+                # Store the date for later use
+                date_str = date_time_result["date"]
+                
+                # Get the available slots for this date to show to the user
+                if doctor:
+                    doctor_slots = get_doctor_available_slots(doctor_id, date_str)
+                    
+                    if doctor_slots:
+                        formatted_date = parser.parse(date_str).strftime('%A, %B %d, %Y')
+                        
+                        # Group times into morning and afternoon
+                        morning_slots = [slot for slot in doctor_slots if "AM" in slot]
+                        afternoon_slots = [slot for slot in doctor_slots if "PM" in slot]
+                        
+                        response = f"For {formatted_date}, we have the following appointment times available with {doctor_name}:\n\n"
+                        
+                        if morning_slots:
+                            response += f"Morning: • {' • '.join(morning_slots)}\n"
+                        
+                        if afternoon_slots:
+                            response += f"Afternoon: • {' • '.join(afternoon_slots)}\n"
+                        
+                        response += "\nPlease select a time for your appointment."
+                        state["response"] = response
+                    else:
+                        state["response"] = f"I'm sorry, but there are no available slots on {parser.parse(date_str).strftime('%A, %B %d, %Y')} with {doctor_name}. Please select a different date."
+                else:
+                    state["response"] = "I'm sorry, there was an issue finding the doctor's available slots. Please try again with a different date."
+                
+                return state
+            
+            # If we have both date and time successfully extracted
+            if date_time_result.get("success"):
+                date_str = date_time_result["date"]
+                time_str = date_time_result["time"]
                 
                 if not doctor:
                     state["response"] = "I'm sorry, there was an issue with the selected doctor. Let's start over."
                     context["state"] = STATES["INITIAL"]
-                else:
-                    # Check if slot is available
-                    try:
-                        available_slots = doctor.get("available_slots", {}).get(formatted_date, [])
-                        debug_log(f"Available slots: {available_slots}")
-                    except Exception as e:
-                        debug_log(f"Error checking available slots: {e}")
-                        available_slots = []
+                    return state
+                
+                # Check if slot is available
+                doctor_slots = get_doctor_available_slots(doctor_id, date_str)
+                
+                if time_str in doctor_slots:
+                    # We found a valid slot - save it for confirmation
+                    context["appointment_date"] = date_str
+                    context["appointment_time"] = time_str
                     
-                    if formatted_time not in available_slots:
-                        slots_str = ", ".join(available_slots[:5])  # Limit to 5 slots for readability
-                        
-                        if slots_str:
-                            state["response"] = f"I'm sorry, but {formatted_time} is not available on that date. Available time slots are: {slots_str}. Would you like to choose one of these times?"
-                        else:
-                            state["response"] = f"I'm sorry, but there are no available slots on that date. Would you like to try another date?"
+                    # Move to email collection
+                    context["state"] = STATES["COLLECTING_EMAIL"]
+                    
+                    state["response"] = "Great! Now, please provide your email address for the appointment confirmation."
+                else:
+                    # Time not available for this doctor
+                    if doctor_slots:
+                        state["response"] = f"I'm sorry, but {time_str} is not available with {doctor_name} on {date_str}. Available times include: {', '.join(doctor_slots[:5])}" + (f" and {len(doctor_slots) - 5} more" if len(doctor_slots) > 5 else "") + ". Please select one of these times."
                     else:
-                        context["appointment_date"] = formatted_date
-                        context["appointment_time"] = formatted_time
-                        context["state"] = STATES["COLLECTING_EMAIL"]
-                        
-                        state["response"] = "Great! Now, please provide your email address for the appointment confirmation."
+                        # No slots at all for this doctor on this date
+                        available_dates = context.get("available_dates", [])
+                        if available_dates:
+                            response = f"I'm sorry, but {doctor_name} has no available slots on {date_str}. Here are the available dates:\n\n"
+                            for date_info in available_dates:
+                                response += f"📅 {date_info['formatted_date']}:\n"
+                                
+                                # Group time slots by morning/afternoon
+                                morning_slots = [slot for slot in date_info['slots'] if "AM" in slot]
+                                afternoon_slots = [slot for slot in date_info['slots'] if "PM" in slot]
+                                
+                                if morning_slots:
+                                    response += f"Morning: • {' • '.join(morning_slots)}\n"
+                                
+                                if afternoon_slots:
+                                    response += f"Afternoon: • {' • '.join(afternoon_slots)}\n"
+                                
+                                response += "\n"
+                            state["response"] = response
+                        else:
+                            state["response"] = f"I'm sorry, but {doctor_name} has no available slots on {date_str}. Please select a different date."
             else:
-                state["response"] = "I need both a date and time for your appointment. Could you please provide them clearly? For example, 'March 15, 2025 at 2pm'."
+                # Couldn't extract date or time
+                state["response"] = date_time_result.get("message", "I couldn't understand the date and time you specified. Please try again with a clear date and time, like 'March 15, 2025 at 2:00 PM'.")
         
         elif context["state"] == STATES["COLLECTING_EMAIL"]:
             # Extract email from transcript
@@ -1986,6 +2102,37 @@ def appointment_agent(state):
             date_time_result = extract_date_time_action(transcript)
             debug_log(f"Date time extraction result: {date_time_result}")
             
+            # Special case: If we got a date but need time
+            if not date_time_result.get("success") and date_time_result.get("need_time") and date_time_result.get("date"):
+                # Store the date for later use
+                context["new_appointment_date"] = date_time_result["date"]
+                
+                # Get the available slots for this date to show to the user
+                date_str = date_time_result["date"]
+                doctor_slots = get_doctor_available_slots(doctor_id, date_str)
+                
+                if doctor_slots:
+                    formatted_date = parser.parse(date_str).strftime('%A, %B %d, %Y')
+                    
+                    # Group times into morning and afternoon
+                    morning_slots = [slot for slot in doctor_slots if "AM" in slot]
+                    afternoon_slots = [slot for slot in doctor_slots if "PM" in slot]
+                    
+                    response = f"For {formatted_date}, we have the following appointment times available with {doctor_name}:\n\n"
+                    
+                    if morning_slots:
+                        response += f"Morning: • {' • '.join(morning_slots)}\n"
+                    
+                    if afternoon_slots:
+                        response += f"Afternoon: • {' • '.join(afternoon_slots)}\n"
+                    
+                    response += "\nPlease select a time for your appointment."
+                    state["response"] = response
+                else:
+                    state["response"] = f"I'm sorry, but there are no available slots on {parser.parse(date_str).strftime('%A, %B %d, %Y')} with {doctor_name}. Please select a different date."
+                
+                return state
+            
             if date_time_result.get("success"):
                 date_str = date_time_result["date"]
                 time_str = date_time_result["time"]
@@ -2027,9 +2174,18 @@ def appointment_agent(state):
                         if available_dates:
                             response = f"I'm sorry, but {doctor_name} has no available slots on {date_str}. Here are the available dates:\n\n"
                             for date_info in available_dates:
-                                response += f"{date_info['formatted_date']}: {', '.join(date_info['slots'][:5])}"
-                                if len(date_info['slots']) > 5:
-                                    response += f" and {len(date_info['slots']) - 5} more"
+                                response += f"📅 {date_info['formatted_date']}:\n"
+                                
+                                # Group time slots by morning/afternoon
+                                morning_slots = [slot for slot in date_info['slots'] if "AM" in slot]
+                                afternoon_slots = [slot for slot in date_info['slots'] if "PM" in slot]
+                                
+                                if morning_slots:
+                                    response += f"Morning: • {' • '.join(morning_slots)}\n"
+                                
+                                if afternoon_slots:
+                                    response += f"Afternoon: • {' • '.join(afternoon_slots)}\n"
+                                
                                 response += "\n"
                             state["response"] = response
                         else:
@@ -2111,6 +2267,10 @@ def appointment_agent(state):
                 # User didn't confirm, go back to date/time collection
                 state["response"] = "No problem. Please provide a different date and time for your appointment."
                 context["state"] = STATES["RESCHEDULING_DATE_TIME"]
+        
+        elif context["state"] == STATES["SCHEDULING_DATE_TIME"]:
+            # Remove this duplicate section that was accidentally added
+            pass
         
         else:
             # Default response for other states

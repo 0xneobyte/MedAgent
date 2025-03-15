@@ -3,11 +3,12 @@ import json
 import pickle
 import time
 import uuid
-from flask import Flask, request, jsonify, render_template, redirect, url_for
+from flask import Flask, request, jsonify, render_template, redirect, url_for, Response
 from flask_cors import CORS
 from dotenv import load_dotenv
 from app.agents.receptionist import transcribe_audio, process_query
 from app.agents.langgraph_workflow import process_workflow
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -265,6 +266,72 @@ def handle_text(conversation_id):
             "response": "I'm sorry, but I encountered an error processing your request.",
             "conversation_id": conversation_id
         })
+
+@app.route('/api/tts', methods=['POST'])
+def text_to_speech():
+    """Handle text-to-speech conversion using ElevenLabs API"""
+    debug_log(f"Received request at /api/tts")
+    
+    try:
+        # Get data from request
+        data = request.json
+        if not data or 'text' not in data:
+            return jsonify({"error": "No text provided"}), 400
+        
+        text = data['text']
+        debug_log(f"Converting to speech: '{text}'")
+        
+        # ElevenLabs API configuration
+        ELEVEN_LABS_API_KEY = os.getenv("ELEVEN_LABS_API_KEY")
+        # Default to "Rachel" voice if not specified
+        voice_id = data.get('voice_id', "21m00Tcm4TlvDq8ikWAM") 
+        
+        # Check if API key is available
+        if not ELEVEN_LABS_API_KEY:
+            debug_log("ElevenLabs API key not found")
+            return jsonify({"error": "ElevenLabs API key not configured"}), 500
+        
+        # Prepare request to ElevenLabs API
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": ELEVEN_LABS_API_KEY
+        }
+        
+        payload = {
+            "text": text,
+            "model_id": "eleven_monolingual_v1",
+            "voice_settings": {
+                "stability": 0.75,
+                "similarity_boost": 0.75
+            }
+        }
+        
+        debug_log(f"Sending request to ElevenLabs API")
+        response = requests.post(url, json=payload, headers=headers)
+        
+        if response.status_code == 200:
+            debug_log("Successfully generated audio from ElevenLabs")
+            
+            # Return the audio data as MP3
+            return Response(
+                response.content,
+                mimetype="audio/mpeg"
+            )
+        else:
+            debug_log(f"Error from ElevenLabs API: {response.status_code} - {response.text}")
+            return jsonify({
+                "error": f"Error from ElevenLabs API: {response.status_code}",
+                "details": response.text
+            }), response.status_code
+            
+    except Exception as e:
+        debug_log(f"Error in TTS endpoint: {e}")
+        import traceback
+        debug_log(f"Traceback: {traceback.format_exc()}")
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 @app.route('/debug/<conversation_id>', methods=['GET'])
 def debug_info(conversation_id):
