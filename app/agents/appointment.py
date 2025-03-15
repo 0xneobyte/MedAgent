@@ -46,7 +46,13 @@ STATES = {
     "COLLECTING_EMAIL": "collecting_email",
     "CONFIRMING": "confirming",
     "COMPLETED": "completed",
-    "CANCELLED": "cancelled"
+    "CANCELLED": "cancelled",
+    # New states for cancellation/rescheduling
+    "CANCELLING_COLLECTING_ID": "cancelling_collecting_id",
+    "CANCELLING_CONFIRMING": "cancelling_confirming",
+    "RESCHEDULING_COLLECTING_ID": "rescheduling_collecting_id",
+    "RESCHEDULING_DATE_TIME": "rescheduling_date_time",
+    "RESCHEDULING_CONFIRMING": "rescheduling_confirming"
 }
 
 def parse_date_time(date_str, time_str):
@@ -724,6 +730,31 @@ def get_step_prompt(step_name, context=None):
             "I need a valid birth date in YYYY-MM-DD format (e.g., 1980-01-15). Could you please provide it?",
             "That birth date format wasn't recognizable. Please use YYYY-MM-DD format.",
             "Please enter your date of birth in YYYY-MM-DD format. For example, January 15, 1980 would be 1980-01-15."
+        ],
+        "cancelling_collecting_id": [
+            "I can help you cancel your appointment. Could you please provide your appointment ID? It should be in the format MA-##### and was included in your confirmation email.",
+            "To cancel your appointment, I'll need your appointment ID. It starts with 'MA-' and was sent in your confirmation email.",
+            "Please provide your appointment ID so I can cancel your appointment. The ID format is MA-##### and was included in your confirmation."
+        ],
+        "cancelling_confirming": [
+            "I've found your appointment: {formatted_date} at {time} with {doctor_name}. Are you sure you want to cancel this appointment? Please confirm by saying 'yes' or 'no'.",
+            "Your appointment on {formatted_date} at {time} with {doctor_name} has been located. Please confirm that you want to cancel by saying 'yes' or 'no'.",
+            "I see your appointment with {doctor_name} scheduled for {formatted_date} at {time}. To confirm cancellation, please say 'yes' or 'no'."
+        ],
+        "rescheduling_collecting_id": [
+            "I can help you reschedule your appointment. Could you please provide your appointment ID? It should be in the format MA-##### and was included in your confirmation email.",
+            "To reschedule your appointment, I'll need your appointment ID. It starts with 'MA-' and was sent in your confirmation email.",
+            "Please provide your appointment ID so I can reschedule your appointment. The ID format is MA-##### and was included in your confirmation."
+        ],
+        "rescheduling_date_time": [
+            "I've found your current appointment on {formatted_date} at {time} with {doctor_name}. What date and time would you prefer for your new appointment?",
+            "Your appointment with {doctor_name} is currently scheduled for {formatted_date} at {time}. Please let me know when you would like to reschedule it.",
+            "I see your appointment with {doctor_name} on {formatted_date} at {time}. What date and time would work better for you?"
+        ],
+        "rescheduling_confirming": [
+            "I'm rescheduling your appointment from {old_date} at {old_time} to {new_date} at {new_time} with {doctor_name}. Is this correct? Please confirm by saying 'yes' or 'no'.",
+            "Your appointment will be moved from {old_date} at {old_time} to {new_date} at {new_time} with {doctor_name}. Please confirm by saying 'yes' or 'no'.",
+            "I've found a new slot for your appointment with {doctor_name} on {new_date} at {new_time} (was {old_date} at {old_time}). Is this acceptable? Please say 'yes' or 'no'."
         ]
     }
     
@@ -804,6 +835,56 @@ def extract_date_time_gpt(transcript):
         debug_log(f"Error in GPT date/time extraction: {e}")
         return None, None, "schedule"
 
+def extract_appointment_id(transcript):
+    """Extract appointment ID from transcript"""
+    debug_log(f"Extracting appointment ID from: '{transcript}'")
+    
+    # Try regex for appointment ID format (MA-#####)
+    id_pattern = r'(MA-\d{5})'
+    match = re.search(id_pattern, transcript)
+    if match:
+        appointment_id = match.group(1)
+        debug_log(f"Extracted appointment ID with regex: '{appointment_id}'")
+        return appointment_id
+    
+    # Try GPT extraction
+    system_prompt = """
+    You are a helpful assistant extracting an appointment ID from a message.
+    Return ONLY the appointment ID without any additional text or explanation.
+    
+    The appointment ID format is MA-##### (e.g., MA-00001).
+    
+    If you cannot determine an appointment ID with high confidence, respond with "Unknown".
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ],
+            temperature=0.1,
+            max_tokens=50
+        )
+        
+        extracted_id = response.choices[0].message.content.strip()
+        debug_log(f"GPT extracted appointment ID: '{extracted_id}'")
+        
+        if extracted_id.lower() == "unknown":
+            debug_log("GPT couldn't identify an appointment ID")
+            return None
+            
+        # Validate that it looks like an appointment ID
+        if re.match(r'^MA-\d{5}$', extracted_id):
+            return extracted_id
+            
+        return None
+        
+    except Exception as e:
+        debug_log(f"Error in GPT appointment ID extraction: {e}")
+        return None
+
 def appointment_agent(state):
     """
     The main Appointment Agent function for LangGraph
@@ -869,6 +950,19 @@ def appointment_agent(state):
         
         context = state["appointment_context"]
         debug_log(f"Current appointment state: {context['state']}")
+        
+        # Check if the user is trying to cancel or reschedule
+        if "cancel" in transcript.lower() and context["state"] in [STATES["INITIAL"], STATES["COMPLETED"]]:
+            debug_log("Detected cancellation intent")
+            context["state"] = STATES["CANCELLING_COLLECTING_ID"]
+            state["response"] = get_step_prompt("cancelling_collecting_id")
+            return state
+            
+        if "reschedule" in transcript.lower() and context["state"] in [STATES["INITIAL"], STATES["COMPLETED"]]:
+            debug_log("Detected rescheduling intent")
+            context["state"] = STATES["RESCHEDULING_COLLECTING_ID"]
+            state["response"] = get_step_prompt("rescheduling_collecting_id")
+            return state
         
         # Determine action based on current state
         if context["state"] == STATES["INITIAL"]:
@@ -1149,14 +1243,16 @@ def appointment_agent(state):
                     debug_log(f"Created patient with ID: {patient_id}")
                     
                     # Book the appointment
-                    appointment_id = Appointment.create(
+                    appointment_result = Appointment.create(
                         patient_id=patient_id,
                         doctor_id=context["selected_doctor_id"],
                         date=context["appointment_date"],
                         time=context["appointment_time"],
                         reason=context["appointment_reason"]
                     )
-                    debug_log(f"Created appointment with ID: {appointment_id}")
+                    appointment_id = appointment_result["appointment_id"]
+                    db_id = appointment_result["db_id"]
+                    debug_log(f"Created appointment with ID: {appointment_id} (DB ID: {db_id})")
                     
                     # Format date for display
                     formatted_date = datetime.datetime.strptime(context["appointment_date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
@@ -1167,11 +1263,12 @@ def appointment_agent(state):
                     
                     context["state"] = STATES["COMPLETED"]
                     
-                    # Success response
-                    state["response"] = f"Great! I've booked your appointment with {doctor['name']} for {formatted_date} at {context['appointment_time']}. A confirmation email has been sent to {context['patient_email']}. Please arrive 15 minutes early to complete any necessary paperwork."
+                    # Success response with appointment ID
+                    state["response"] = f"Great! I've booked your appointment with {doctor['name']} for {formatted_date} at {context['appointment_time']}. Your appointment ID is {appointment_id}. A confirmation email has been sent to {context['patient_email']}. Please arrive 15 minutes early to complete any necessary paperwork."
                     
                     # Store appointment details in state for notification agent
                     state["appointment_details"] = {
+                        "appointment_id": appointment_id,
                         "patient_name": context["patient_name"],
                         "patient_email": context["patient_email"],
                         "doctor_name": doctor["name"],
@@ -1190,6 +1287,106 @@ def appointment_agent(state):
                 state["response"] = "No problem, let's start over with your appointment booking. What would you like to do?"
                 context["state"] = STATES["INITIAL"]
         
+        elif context["state"] == STATES["CANCELLING_COLLECTING_ID"]:
+            # Extract appointment ID
+            appointment_id = extract_appointment_id(transcript)
+            if appointment_id:
+                # Look up the appointment
+                appointment = Appointment.find_by_appointment_id(appointment_id)
+                if appointment:
+                    # Get more details about the appointment
+                    try:
+                        patient = patients_collection.find_one({"_id": appointment["patient_id"]})
+                        doctor = doctors_collection.find_one({"_id": appointment["doctor_id"]})
+                        
+                        # Format date for display
+                        formatted_date = datetime.datetime.strptime(appointment["date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                        
+                        # Save to context
+                        context["cancellation_appointment_id"] = appointment_id
+                        context["cancellation_appointment"] = {
+                            "doctor_name": doctor["name"] if doctor else "Unknown Doctor",
+                            "formatted_date": formatted_date,
+                            "time": appointment["time"],
+                            "patient_name": patient["name"] if patient else "Unknown Patient"
+                        }
+                        
+                        # Move to confirmation step
+                        context["state"] = STATES["CANCELLING_CONFIRMING"]
+                        confirmation_context = context["cancellation_appointment"]
+                        state["response"] = get_step_prompt("cancelling_confirming", confirmation_context)
+                    except Exception as e:
+                        debug_log(f"Error getting appointment details: {e}")
+                        state["response"] = "I'm sorry, but I encountered an error retrieving your appointment details. Please try again."
+                else:
+                    state["response"] = f"I'm sorry, but I couldn't find an appointment with ID {appointment_id}. Please check the ID and try again."
+            else:
+                state["response"] = "I couldn't identify an appointment ID in your message. Please provide your appointment ID in the format MA-##### (e.g., MA-00001)."
+                
+        elif context["state"] == STATES["CANCELLING_CONFIRMING"]:
+            # Check if user confirms
+            confirmation = "yes" in transcript.lower() or "confirm" in transcript.lower()
+            
+            if confirmation:
+                # Cancel the appointment
+                try:
+                    appointment_id = context["cancellation_appointment_id"]
+                    success = Appointment.cancel(appointment_id)
+                    
+                    if success:
+                        # Format a nice response with appointment details
+                        appointment_details = context["cancellation_appointment"]
+                        state["response"] = f"I've cancelled your appointment with {appointment_details['doctor_name']} on {appointment_details['formatted_date']} at {appointment_details['time']}. Thank you for letting us know."
+                        
+                        # Reset the state
+                        context["state"] = STATES["INITIAL"]
+                    else:
+                        state["response"] = "I'm sorry, but I couldn't cancel your appointment. Please call our office for assistance."
+                except Exception as e:
+                    debug_log(f"Error cancelling appointment: {e}")
+                    state["response"] = "I'm sorry, but I encountered an error while trying to cancel your appointment. Please try again or call our office."
+            else:
+                state["response"] = "I understand you don't want to cancel your appointment. Is there anything else I can help you with?"
+                context["state"] = STATES["INITIAL"]
+                
+        elif context["state"] == STATES["RESCHEDULING_COLLECTING_ID"]:
+            # Extract appointment ID
+            appointment_id = extract_appointment_id(transcript)
+            if appointment_id:
+                # Look up the appointment
+                appointment = Appointment.find_by_appointment_id(appointment_id)
+                if appointment:
+                    # Get more details about the appointment
+                    try:
+                        patient = patients_collection.find_one({"_id": appointment["patient_id"]})
+                        doctor = doctors_collection.find_one({"_id": appointment["doctor_id"]})
+                        
+                        # Format date for display
+                        formatted_date = datetime.datetime.strptime(appointment["date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                        
+                        # Save to context
+                        context["reschedule_appointment_id"] = appointment_id
+                        context["reschedule_appointment"] = {
+                            "doctor_name": doctor["name"] if doctor else "Unknown Doctor",
+                            "doctor_id": appointment["doctor_id"],
+                            "formatted_date": formatted_date,
+                            "date": appointment["date"],
+                            "time": appointment["time"],
+                            "patient_name": patient["name"] if patient else "Unknown Patient"
+                        }
+                        
+                        # Move to date/time collection step
+                        context["state"] = STATES["RESCHEDULING_DATE_TIME"]
+                        reschedule_context = context["reschedule_appointment"]
+                        state["response"] = get_step_prompt("rescheduling_date_time", reschedule_context)
+                    except Exception as e:
+                        debug_log(f"Error getting appointment details: {e}")
+                        state["response"] = "I'm sorry, but I encountered an error retrieving your appointment details. Please try again."
+                else:
+                    state["response"] = f"I'm sorry, but I couldn't find an appointment with ID {appointment_id}. Please check the ID and try again."
+            else:
+                state["response"] = "I couldn't identify an appointment ID in your message. Please provide your appointment ID in the format MA-##### (e.g., MA-00001)."
+                
         else:
             # Default response for other states
             state["response"] = "I'm here to help with your appointment. What would you like to do?"

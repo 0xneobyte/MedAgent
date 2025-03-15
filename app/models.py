@@ -21,6 +21,36 @@ def calculate_age(birthdate):
     age = relativedelta(today, birthdate).years
     return age
 
+# Function to generate a sequential appointment ID
+def generate_appointment_id():
+    """
+    Generate a sequential appointment ID with format MA-00001
+    
+    Returns:
+        str: Formatted appointment ID
+    """
+    # For a real implementation, this would be stored in a database
+    # For demo purposes, we'll use a simple file-based approach
+    try:
+        # Try to read the last ID from a file
+        with open("last_appointment_id.txt", "r") as f:
+            last_id = int(f.read().strip())
+    except:
+        # If file doesn't exist or can't be read, start from 0
+        last_id = 0
+    
+    # Increment the ID
+    new_id = last_id + 1
+    
+    # Save the new ID
+    with open("last_appointment_id.txt", "w") as f:
+        f.write(str(new_id))
+    
+    # Format the ID with leading zeros
+    formatted_id = f"MA-{new_id:05d}"
+    
+    return formatted_id
+
 class Patient:
     @staticmethod
     def create(name, phone, email, birthdate):
@@ -194,32 +224,82 @@ class Doctor:
 class Appointment:
     @staticmethod
     def create(patient_id, doctor_id, date, time, reason):
-        """Create a new appointment"""
+        """Create a new appointment record"""
+        # Generate a unique appointment ID
+        appointment_id = generate_appointment_id()
+        
         appointment_data = {
+            "appointment_id": appointment_id,
             "patient_id": patient_id,
             "doctor_id": doctor_id,
             "date": date,
             "time": time,
             "reason": reason,
-            "created_at": datetime.now(),
-            "status": "scheduled"
+            "status": "confirmed",
+            "created_at": datetime.now()
         }
         
         result = appointments_collection.insert_one(appointment_data)
-        return result.inserted_id
+        return {
+            "db_id": result.inserted_id,
+            "appointment_id": appointment_id
+        }
     
     @staticmethod
     def find_by_patient(patient_id):
-        """Find all appointments for a patient"""
-        return list(appointments_collection.find({"patient_id": patient_id}).sort("date", 1))
+        """Find appointments for a specific patient"""
+        return list(appointments_collection.find({"patient_id": patient_id}))
+    
+    @staticmethod
+    def find_by_appointment_id(appointment_id):
+        """Find an appointment by appointment_id"""
+        return appointments_collection.find_one({"appointment_id": appointment_id})
+    
+    @staticmethod
+    def find_appointments_by_patient_info(name=None, phone=None, email=None):
+        """Find appointments by patient information"""
+        # First find the patient
+        query = {}
+        if name:
+            query["name"] = name
+        if phone:
+            query["phone"] = phone
+        if email:
+            query["email"] = email
+        
+        if not query:
+            return []
+        
+        patients = list(patients_collection.find(query))
+        if not patients:
+            return []
+        
+        # Get all appointments for these patients
+        patient_ids = [patient["_id"] for patient in patients]
+        return list(appointments_collection.find({"patient_id": {"$in": patient_ids}}))
     
     @staticmethod
     def cancel(appointment_id):
-        """Cancel an appointment"""
-        appointments_collection.update_one(
-            {"_id": appointment_id},
+        """Cancel an appointment by setting its status to cancelled"""
+        result = appointments_collection.update_one(
+            {"appointment_id": appointment_id},
             {"$set": {"status": "cancelled", "updated_at": datetime.now()}}
         )
+        return result.modified_count > 0
+    
+    @staticmethod
+    def reschedule(appointment_id, new_date, new_time):
+        """Reschedule an appointment by updating date and time"""
+        result = appointments_collection.update_one(
+            {"appointment_id": appointment_id},
+            {"$set": {
+                "date": new_date,
+                "time": new_time,
+                "status": "rescheduled",
+                "updated_at": datetime.now()
+            }}
+        )
+        return result.modified_count > 0
 
 # Initialize sample data when imported
 Doctor.seed_sample_doctors() 

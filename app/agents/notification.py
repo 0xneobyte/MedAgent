@@ -95,6 +95,7 @@ def create_appointment_confirmation_email(appointment_details):
     doctor_name = appointment_details.get("doctor_name", "Doctor")
     doctor_specialty = appointment_details.get("doctor_specialty", "")
     reason = appointment_details.get("reason", "Consultation")
+    appointment_id = appointment_details.get("appointment_id", "MA-00000")
     
     html_content = f"""
     <html>
@@ -107,13 +108,15 @@ def create_appointment_confirmation_email(appointment_details):
                     <p>Dear {patient_name},</p>
                     <p>Your appointment has been scheduled for:</p>
                     <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #4b6cb7; margin: 15px 0;">
+                        <p><strong>Appointment ID:</strong> {appointment_id}</p>
                         <p><strong>Date:</strong> {formatted_date}</p>
                         <p><strong>Time:</strong> {time}</p>
                         <p><strong>Provider:</strong> {doctor_name} ({doctor_specialty})</p>
                         <p><strong>Reason:</strong> {reason}</p>
                     </div>
+                    <p>Please save your appointment ID ({appointment_id}) for future reference. You will need this ID if you want to reschedule or cancel your appointment.</p>
                     <p>Please arrive 15 minutes before your appointment time to complete any necessary paperwork.</p>
-                    <p>If you need to reschedule or cancel, please call our office at (555) 123-4567 at least 24 hours before your appointment.</p>
+                    <p>If you need to reschedule or cancel, please call our office at (555) 123-4567 at least 24 hours before your appointment and provide your appointment ID.</p>
                     <p>Thank you for choosing our clinic for your healthcare needs.</p>
                     <p>Best regards,<br>The Medical Office Team</p>
                 </div>
