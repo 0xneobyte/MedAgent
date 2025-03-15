@@ -97,6 +97,40 @@
         align-items: center;
         margin-top: 20px;
         position: relative;
+        width: 100%;
+      }
+
+      .input-group {
+        display: flex;
+        margin-right: 15px;
+        width: 100%;
+        max-width: 600px;
+      }
+
+      .text-input {
+        flex-grow: 1;
+        padding: 10px 15px;
+        border: 1px solid #ddd;
+        border-radius: 20px 0 0 20px;
+        font-size: 16px;
+        outline: none;
+      }
+
+      .send-button {
+        background-color: #3b5998;
+        color: white;
+        border: none;
+        border-radius: 0 20px 20px 0;
+        width: 50px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s ease;
+      }
+
+      .send-button:hover {
+        background-color: #2d4373;
       }
 
       .mic-button {
@@ -183,6 +217,30 @@
         <div class="controls">
           <div class="listening-indicator" id="listening-indicator">
             Listening...
+          </div>
+          <div class="input-group">
+            <input
+              type="text"
+              id="text-input"
+              class="text-input"
+              placeholder="Type your message here..."
+            />
+            <button class="send-button" id="send-button">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
           </div>
           <button class="mic-button" id="mic-button">
             <svg
@@ -335,6 +393,62 @@
 
         // Add click event to microphone button
         micButton.addEventListener("click", startRecording);
+
+        // Add event listener for the send button
+        const textInput = document.getElementById("text-input");
+        const sendButton = document.getElementById("send-button");
+
+        // Function to send text input
+        function sendText() {
+          const text = textInput.value.trim();
+          if (text) {
+            // Update UI
+            statusBox.textContent = "Processing your request...";
+
+            // Display user's message
+            addMessage(text, true);
+
+            // Send to server
+            fetch(`/api/text/${conversationId}`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ text: text }),
+            })
+              .then((response) => {
+                if (!response.ok) {
+                  throw new Error("Network response was not ok");
+                }
+                return response.json();
+              })
+              .then((data) => {
+                // Display response
+                if (data.response) {
+                  addMessage(data.response, false);
+                  statusBox.textContent = `Intent detected: ${
+                    data.intent || "unknown"
+                  }`;
+                }
+              })
+              .catch((error) => {
+                console.error("Error:", error);
+                statusBox.textContent =
+                  "Error processing your request. Please try again.";
+              });
+
+            // Clear the input
+            textInput.value = "";
+          }
+        }
+
+        // Add event listeners for send button and Enter key
+        sendButton.addEventListener("click", sendText);
+        textInput.addEventListener("keyup", function (event) {
+          if (event.key === "Enter") {
+            sendText();
+          }
+        });
       });
     </script>
   </body>

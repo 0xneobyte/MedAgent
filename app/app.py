@@ -169,6 +169,103 @@ def handle_transcription(conversation_id):
             "conversation_id": conversation_id
         })
 
+@app.route('/api/text/<conversation_id>', methods=['POST'])
+def handle_text(conversation_id):
+    """Handle text input directly without audio transcription"""
+    debug_log(f"Received text request at /api/text/{conversation_id}")
+    
+    # Get the text from the request
+    data = request.json
+    if not data or 'text' not in data:
+        return jsonify({"error": "No text provided"}), 400
+    
+    text = data['text']
+    debug_log(f"Received text: '{text}'")
+    
+    # Ensure the conversation exists
+    if conversation_id not in CONVERSATION_STORE:
+        debug_log(f"Conversation ID not found, initializing: {conversation_id}")
+        CONVERSATION_STORE[conversation_id] = {
+            "conversation_in_progress": False,
+            "original_intent": "",
+            "appointment_context": {},
+            "last_updated": time.time()
+        }
+    
+    # Get the current conversation state
+    conversation = CONVERSATION_STORE[conversation_id]
+    debug_log(f"Retrieved conversation: {json.dumps(conversation)}")
+    
+    # Check appointment context
+    appointment_context = conversation.get("appointment_context", {})
+    debug_log(f"Retrieved appointment_context: {json.dumps(appointment_context)}")
+    
+    # Process the query with LangGraph workflow
+    try:
+        # Initialize state with text and conversation ID
+        initial_state = {
+            "transcript": text,  # Use the text as transcript
+            "patient_id": "demo_patient",
+            "conversation_id": conversation_id
+        }
+        
+        # Add conversation state if conversation is in progress
+        conversation_in_progress = conversation.get("conversation_in_progress", False)
+        original_intent = conversation.get("original_intent", "")
+        
+        debug_log(f"Conversation in progress: {conversation_in_progress}")
+        debug_log(f"Original intent: {original_intent}")
+        
+        if conversation_in_progress:
+            debug_log("Conversation is in progress, restoring state")
+            initial_state["conversation_in_progress"] = True
+            initial_state["original_intent"] = original_intent
+        
+        # Always add appointment context if it exists, even if it's empty
+        if appointment_context:
+            debug_log(f"Adding appointment_context to initial state: {json.dumps(appointment_context)}")
+            initial_state["appointment_context"] = appointment_context
+        else:
+            debug_log("No appointment_context to add to initial state")
+        
+        debug_log(f"Final initial state: {json.dumps(initial_state)}")
+        
+        # Run the workflow with our wrapper function
+        final_state = process_workflow(initial_state)
+        debug_log(f"Received final state: {json.dumps(final_state)}")
+        
+        # Update conversation store with the results
+        CONVERSATION_STORE[conversation_id]["conversation_in_progress"] = final_state.get("conversation_in_progress", False)
+        CONVERSATION_STORE[conversation_id]["original_intent"] = final_state.get("original_intent", "")
+        CONVERSATION_STORE[conversation_id]["last_updated"] = time.time()
+        
+        # Make sure to capture any appointment_context updates from the workflow
+        if "appointment_context" in final_state:
+            debug_log(f"Saving appointment_context to conversation store: {json.dumps(final_state['appointment_context'])}")
+            CONVERSATION_STORE[conversation_id]["appointment_context"] = final_state["appointment_context"]
+        else:
+            debug_log("No appointment_context in final state to save")
+            
+        debug_log(f"Final conversation store state: {json.dumps(CONVERSATION_STORE[conversation_id])}")
+        
+        # Return the response
+        return jsonify({
+            "transcript": text,
+            "intent": final_state.get("intent", "unknown"),
+            "response": final_state.get("response", "I'm not sure how to respond to that."),
+            "conversation_id": conversation_id
+        })
+    except Exception as e:
+        debug_log(f"Error processing query: {e}")
+        import traceback
+        debug_log(f"Traceback: {traceback.format_exc()}")
+        return jsonify({
+            "transcript": text,
+            "intent": "error",
+            "response": "I'm sorry, but I encountered an error processing your request.",
+            "conversation_id": conversation_id
+        })
+
 @app.route('/debug/<conversation_id>', methods=['GET'])
 def debug_info(conversation_id):
     """Return debug information about a conversation"""

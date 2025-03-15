@@ -563,35 +563,70 @@ def extract_birthdate(transcript):
         return None
 
 def extract_email(transcript):
-    """Extract email from transcript"""
-    # Try regex for email format
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    match = re.search(email_pattern, transcript)
-    if match:
-        return match.group(0)
+    """Extract email from transcript with improved handling"""
+    debug_log(f"Extracting email from: '{transcript}'")
     
-    # If regex fails, try GPT extraction
+    # First, try to handle common cases with spaces
+    # Remove spaces that might be in email addresses (e.g., "hello @ gmail . com")
+    cleaned_transcript = re.sub(r'(\w+)\s+@\s+(\w+)\s+\.\s+(\w+)', r'\1@\2.\3', transcript)
+    
+    # Also try with just one side having spaces
+    cleaned_transcript = re.sub(r'(\w+)\s+@\s*(\w+\.\w+)', r'\1@\2', cleaned_transcript)
+    cleaned_transcript = re.sub(r'(\w+)\s*@\s+(\w+\.\w+)', r'\1@\2', cleaned_transcript)
+    
+    # Try regex for standard email format
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    match = re.search(email_pattern, cleaned_transcript)
+    if match:
+        email = match.group(0)
+        debug_log(f"Extracted email with regex: '{email}'")
+        return email
+    
+    # Try GPT extraction with improved prompt
     system_prompt = """
     You are a helpful assistant extracting an email address from a message.
     Return ONLY the email address without any additional text or explanation.
-    If you cannot determine an email address, respond with "Unknown".
+    
+    If the input might contain an email with spaces or unusual formatting, 
+    convert it to a proper email format.
+    
+    Examples:
+    - "hello@gmail.com" → hello@gmail.com
+    - "hello @ gmail . com" → hello@gmail.com
+    - "My email is hello at gmail dot com" → hello@gmail.com
+    - "contact me at hello gmail com" → hello@gmail.com
+    - "hello adsign gmail.com" → hello@gmail.com
+    
+    If you cannot determine an email address with high confidence, respond with "Unknown".
     """
     
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcript}
-        ],
-        temperature=0.1,
-        max_tokens=50
-    )
-    
-    email = response.choices[0].message.content.strip()
-    if email.lower() == "unknown" or not '@' in email:
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ],
+            temperature=0.1,
+            max_tokens=50
+        )
+        
+        email = response.choices[0].message.content.strip()
+        debug_log(f"GPT extracted email: '{email}'")
+        
+        if email.lower() == "unknown":
+            debug_log("GPT couldn't identify an email")
+            return None
+            
+        # Validate that it looks like an email
+        if '@' in email and '.' in email.split('@')[1]:
+            return email
+            
         return None
         
-    return email
+    except Exception as e:
+        debug_log(f"Error in GPT email extraction: {e}")
+        return None
 
 def extract_reason(transcript):
     """Extract reason for visit from transcript"""
