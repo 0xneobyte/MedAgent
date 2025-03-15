@@ -1945,13 +1945,23 @@ def appointment_agent(state):
                         response = f"I've found your current appointment on {formatted_date} at {appointment['time']} with {doctor_name}. "
                         
                         if available_dates:
-                            response += f"Here are available time slots with {doctor_name}:\n\n"
+                            response += f"Here are available time slots with {doctor_name}:"
                             for date_info in available_dates:
-                                response += f"{date_info['formatted_date']}: {', '.join(date_info['slots'][:5])}"
-                                if len(date_info['slots']) > 5:
-                                    response += f" and {len(date_info['slots']) - 5} more"
-                                response += "\n"
-                            response += "\nPlease select a date and time for your new appointment."
+                                # Format the date with calendar emoji
+                                response += f"\n\n📅 {date_info['formatted_date']}:"
+                                slots_to_show = date_info['slots']
+                                
+                                # Group time slots by morning/afternoon for better readability
+                                morning_slots = [slot for slot in slots_to_show if "AM" in slot]
+                                afternoon_slots = [slot for slot in slots_to_show if "PM" in slot]
+                                
+                                if morning_slots:
+                                    response += f"\nMorning: • {' • '.join(morning_slots)}"
+                                
+                                if afternoon_slots:
+                                    response += f"\nAfternoon: • {' • '.join(afternoon_slots)}"
+                            
+                            response += "\n\nPlease select a date and time for your new appointment."
                         else:
                             response += f"I'm sorry, but {doctor_name} doesn't have any available slots in the next 10 days. Please call our office to check for other options."
                         
