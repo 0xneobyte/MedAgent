@@ -294,7 +294,11 @@
               </svg>
             </button>
           </div>
-          <button class="mic-button" id="mic-button">
+          <button
+            class="mic-button"
+            id="mic-button"
+            title="Tap to start/stop recording"
+          >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="24"
@@ -471,6 +475,18 @@
         // Function to start recording audio
         function startRecording() {
           if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            // If we're already recording, stop the recording
+            if (micButton.classList.contains("recording")) {
+              // Find and stop the active recorder
+              if (
+                window.activeMediaRecorder &&
+                window.activeMediaRecorder.state === "recording"
+              ) {
+                window.activeMediaRecorder.stop();
+              }
+              return;
+            }
+
             // Update UI
             micButton.classList.add("recording");
             listeningIndicator.style.display = "block";
@@ -489,6 +505,9 @@
                   console.error("MediaRecorder error:", e);
                   return;
                 }
+
+                // Store the active recorder in a global variable for access when stopping
+                window.activeMediaRecorder = mediaRecorder;
 
                 // Handle data available event
                 mediaRecorder.addEventListener("dataavailable", (event) => {
@@ -546,13 +565,6 @@
 
                 // Start recording
                 mediaRecorder.start();
-
-                // Auto stop after 10 seconds
-                setTimeout(() => {
-                  if (mediaRecorder.state !== "inactive") {
-                    mediaRecorder.stop();
-                  }
-                }, 10000);
               })
               .catch((error) => {
                 console.error("Error accessing microphone:", error);
