@@ -4,7 +4,7 @@ from langfuse.client import Langfuse
 import datetime
 import json
 import re
-from app.models import Patient, Doctor, Appointment
+from app.models import Patient, Doctor, Appointment, patients_collection, doctors_collection
 import random
 
 # Initialize OpenAI client
