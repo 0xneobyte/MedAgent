@@ -35,8 +35,12 @@ def receptionist_agent_wrapper(state):
         updated_state = receptionist_agent(state)
         
         # Then override the intent with the original intent
-        updated_state["intent"] = state.get("original_intent")
-        print(f"DEBUG WORKFLOW: Overriding intent to: {updated_state['intent']}")
+        # UNLESS it's a cancellation update from the appointment agent
+        if updated_state.get("intent") != "cancel_appointment":
+            updated_state["intent"] = state.get("original_intent")
+            print(f"DEBUG WORKFLOW: Overriding intent to: {updated_state['intent']}")
+        else:
+            print(f"DEBUG WORKFLOW: Detected cancellation intent, not overriding")
         
         return updated_state
     else:
@@ -44,7 +48,7 @@ def receptionist_agent_wrapper(state):
         updated_state = receptionist_agent(state)
         
         # If this is a new appointment intent, mark the conversation as in progress
-        if "appointment" in updated_state.get("intent", ""):
+        if updated_state.get("intent") in ["schedule_appointment", "book_appointment"]:
             print(f"DEBUG WORKFLOW: Setting conversation_in_progress=True for appointment intent")
             updated_state["conversation_in_progress"] = True
             updated_state["original_intent"] = updated_state.get("intent")
@@ -69,7 +73,7 @@ def route_by_intent(state):
     # For debugging
     print(f"DEBUG WORKFLOW: Routing based on intent: {intent}")
     
-    if "appointment" in intent:
+    if intent in ["schedule_appointment", "book_appointment", "cancel_appointment"]:
         return "appointment"
     elif intent == "general_inquiry":
         return "call_center"
@@ -88,10 +92,33 @@ workflow_builder.add_conditional_edges(
 )
 
 # After appointment handling, route to notification agent
+def prepare_for_notification(state):
+    print(f"DEBUG WORKFLOW: Preparing state for notification agent")
+    print(f"DEBUG WORKFLOW: Intent for notification: {state.get('intent')}")
+    if "cancellation_details" in state:
+        print(f"DEBUG WORKFLOW: Found cancellation details: {state['cancellation_details']}")
+    return state
+
+# Use standard add_edge without transform parameter
 workflow_builder.add_edge("appointment", "notification")
 
-# All responses should go through content management for validation
-workflow_builder.add_edge("notification", "content_management")
+# Add a conditional edge from notification to content management
+def after_notification(state):
+    print(f"DEBUG WORKFLOW: After notification agent, state contains: {list(state.keys())}")
+    print(f"DEBUG WORKFLOW: Intent after notification: {state.get('intent', 'None')}")
+    if "cancellation_details" in state:
+        print(f"DEBUG WORKFLOW: Has cancellation details: {state['cancellation_details']}")
+    return "content_management"
+
+workflow_builder.add_conditional_edges(
+    "notification",
+    after_notification,
+    {
+        "content_management": "content_management",
+    }
+)
+
+# All other responses should go through content management for validation
 workflow_builder.add_edge("call_center", "content_management")
 
 # Set the entry point to receptionist
@@ -113,8 +140,20 @@ def process_workflow(input_state):
     if "appointment_context" not in input_state:
         input_state["appointment_context"] = {}
     
+    # Store original state for post-processing
+    original_intent = input_state.get("intent")
+    has_cancellation = "cancellation_details" in input_state
+    cancellation_details = input_state.get("cancellation_details")
+    
     # Run the workflow
     final_state = workflow.invoke(input_state)
+    
+    # Preserve cancellation details and intent if they were created/modified by appointment agent
+    if final_state.get("intent") == "cancel_appointment" or has_cancellation:
+        print("DEBUG WORKFLOW: Preserving cancellation intent and details in final state")
+        final_state["intent"] = "cancel_appointment"
+        if cancellation_details:
+            final_state["cancellation_details"] = cancellation_details
     
     # Ensure appointment_context is preserved in the final state
     if "appointment_context" in input_state and "appointment_context" not in final_state:

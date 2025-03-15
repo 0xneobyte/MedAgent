@@ -1363,6 +1363,39 @@ def appointment_agent(state):
                         doctor_name = appointment_details.get('doctor_name', 'Unknown Doctor')
                         formatted_date = appointment_details.get('formatted_date', 'Unknown Date')
                         time = appointment_details.get('time', 'Unknown Time')
+                        patient_name = appointment_details.get('patient_name', 'Unknown Patient')
+                        
+                        # Try to get patient email if available
+                        patient_email = None
+                        try:
+                            # Get the appointment to find the patient
+                            appointment = Appointment.find_by_appointment_id(appointment_id)
+                            if appointment and appointment.get("patient_id"):
+                                # Look up the patient to get their email
+                                patient = patients_collection.find_one({"_id": appointment["patient_id"]})
+                                if patient and patient.get("email"):
+                                    patient_email = patient["email"]
+                                    debug_log(f"Found patient email for cancellation: {patient_email}")
+                        except Exception as e:
+                            debug_log(f"Error retrieving patient email: {e}")
+                        
+                        # Update the intent to indicate cancellation
+                        state["intent"] = "cancel_appointment"
+                        
+                        # Store cancellation details in state for notification agent to send email
+                        state["cancellation_details"] = {
+                            "appointment_id": appointment_id,
+                            "patient_name": patient_name,
+                            "patient_email": patient_email,  # This will be the actual email or None
+                            "doctor_name": doctor_name,
+                            "date": appointment_details.get('date'),
+                            "formatted_date": formatted_date,
+                            "time": time
+                        }
+                        
+                        # Log the cancellation details (for debugging)
+                        debug_log(f"Setting cancellation details in state: {state['cancellation_details']}")
+                        debug_log(f"Current state intent: {state['intent']}")
                         
                         # Construct response with available details
                         state["response"] = f"I've cancelled your appointment with {doctor_name} on {formatted_date} at {time}. Thank you for letting us know."
