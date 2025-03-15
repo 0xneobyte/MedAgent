@@ -1382,8 +1382,8 @@ def appointment_agent(state):
                         # Update the intent to indicate cancellation
                         state["intent"] = "cancel_appointment"
                         
-                        # Store cancellation details in state for notification agent to send email
-                        state["cancellation_details"] = {
+                        # Store cancellation details in both state and context
+                        cancellation_details = {
                             "appointment_id": appointment_id,
                             "patient_name": patient_name,
                             "patient_email": patient_email,  # This will be the actual email or None
@@ -1393,8 +1393,17 @@ def appointment_agent(state):
                             "time": time
                         }
                         
+                        # Add to state (this might get lost in the workflow)
+                        state["cancellation_details"] = cancellation_details
+                        
+                        # Add to appointment_context (this should persist)
+                        if "appointment_context" not in state:
+                            state["appointment_context"] = {}
+                        state["appointment_context"]["cancellation_details"] = cancellation_details
+                        
                         # Log the cancellation details (for debugging)
                         debug_log(f"Setting cancellation details in state: {state['cancellation_details']}")
+                        debug_log(f"Setting cancellation details in context: {state['appointment_context']['cancellation_details']}")
                         debug_log(f"Current state intent: {state['intent']}")
                         
                         # Construct response with available details

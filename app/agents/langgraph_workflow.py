@@ -142,18 +142,42 @@ def process_workflow(input_state):
     
     # Store original state for post-processing
     original_intent = input_state.get("intent")
-    has_cancellation = "cancellation_details" in input_state
-    cancellation_details = input_state.get("cancellation_details")
+    
+    # Check for cancellation details in input state
+    has_cancellation_direct = "cancellation_details" in input_state
+    has_cancellation_context = "appointment_context" in input_state and "cancellation_details" in input_state["appointment_context"]
+    
+    # Store original cancellation details if they exist
+    cancellation_details = None
+    if has_cancellation_direct:
+        cancellation_details = input_state["cancellation_details"]
+        print("DEBUG WORKFLOW: Found cancellation details directly in input state")
+    elif has_cancellation_context:
+        cancellation_details = input_state["appointment_context"]["cancellation_details"]
+        print("DEBUG WORKFLOW: Found cancellation details in appointment_context")
     
     # Run the workflow
+    print("DEBUG WORKFLOW: Running workflow with input state keys:", list(input_state.keys()))
     final_state = workflow.invoke(input_state)
+    print("DEBUG WORKFLOW: Workflow returned final state keys:", list(final_state.keys()))
     
-    # Preserve cancellation details and intent if they were created/modified by appointment agent
-    if final_state.get("intent") == "cancel_appointment" or has_cancellation:
-        print("DEBUG WORKFLOW: Preserving cancellation intent and details in final state")
-        final_state["intent"] = "cancel_appointment"
-        if cancellation_details:
+    # Check for cancellation intent and details in the final state
+    if final_state.get("intent") == "cancel_appointment":
+        print("DEBUG WORKFLOW: Final state has cancel_appointment intent")
+        
+        # Ensure cancellation details are in the final state
+        if "cancellation_details" not in final_state and cancellation_details:
+            print("DEBUG WORKFLOW: Restoring cancellation details to final state")
             final_state["cancellation_details"] = cancellation_details
+        
+        # Also check if cancellation details are in the appointment_context
+        if "appointment_context" in final_state and "cancellation_details" in final_state["appointment_context"]:
+            print("DEBUG WORKFLOW: Found cancellation details in final appointment_context")
+            
+            # Make sure they're also in the root state
+            if "cancellation_details" not in final_state:
+                final_state["cancellation_details"] = final_state["appointment_context"]["cancellation_details"]
+                print("DEBUG WORKFLOW: Copied cancellation details from context to root state")
     
     # Ensure appointment_context is preserved in the final state
     if "appointment_context" in input_state and "appointment_context" not in final_state:

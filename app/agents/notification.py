@@ -208,10 +208,28 @@ def notification_agent(state):
         print(f"Notification agent received intent: {intent}")
         print(f"State keys: {list(state.keys())}")
         
-        # Special check for cancellation handling
-        has_cancellation_details = "cancellation_details" in state
+        # Check if we have cancellation details either directly or in the appointment context
+        cancellation_details = None
+        has_cancellation_details = False
+        
+        # Try to get cancellation details from direct state
+        if "cancellation_details" in state:
+            cancellation_details = state["cancellation_details"]
+            has_cancellation_details = True
+            print(f"Found cancellation details directly in state")
+        
+        # If not in direct state, check appointment_context
+        elif "appointment_context" in state and "cancellation_details" in state["appointment_context"]:
+            cancellation_details = state["appointment_context"]["cancellation_details"]
+            has_cancellation_details = True
+            print(f"Found cancellation details in appointment_context")
+            
+            # Also add to root state for consistency
+            state["cancellation_details"] = cancellation_details
+        
+        # Log whether we found cancellation details
         if has_cancellation_details:
-            print(f"Found cancellation details in state: {state['cancellation_details']}")
+            print(f"Cancellation details: {cancellation_details}")
             # Force intent to cancel_appointment if we have cancellation details 
             if intent != "cancel_appointment":
                 print(f"Overriding intent from {intent} to cancel_appointment due to cancellation_details")
@@ -253,8 +271,6 @@ def notification_agent(state):
         # Check if this is a cancellation intent
         elif intent == "cancel_appointment" and has_cancellation_details:
             print(f"Processing cancellation notification...")
-            # Get cancellation details from state
-            cancellation_details = state["cancellation_details"]
             print(f"Cancellation details: {cancellation_details}")
             
             # Create a span to track email sending
