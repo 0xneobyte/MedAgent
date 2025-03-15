@@ -422,6 +422,22 @@ def extract_name(transcript):
     """Extract name from transcript using GPT"""
     debug_log(f"Extracting name from: '{transcript}'")
     
+    # First, check for common patterns where name is directly stated
+    # This will help avoid unnecessary API calls for simple cases
+    name_patterns = [
+        r"(?:my name is|i am|this is|i'm) ([a-zA-Z\s]+)",
+        r"([a-zA-Z\s]+) is my name",
+        r"name (?:is|:) ([a-zA-Z\s]+)",
+    ]
+    
+    for pattern in name_patterns:
+        match = re.search(pattern, transcript.lower())
+        if match:
+            name = match.group(1).strip().title()
+            debug_log(f"Regex extracted name: '{name}'")
+            return name
+    
+    # If simple patterns don't match, use GPT
     system_prompt = """
     You are a helpful assistant extracting a patient's name from their message.
     Return ONLY the name without any additional text or explanation.
@@ -436,6 +452,9 @@ def extract_name(transcript):
     
     Input: "This is Sarah Johnson"
     Output: Sarah Johnson
+    
+    Input: "my name is tharushka dinujaya"
+    Output: Tharushka Dinujaya
     
     Input: "I'd like to book an appointment"
     Output: Unknown
@@ -457,12 +476,22 @@ def extract_name(transcript):
         
         if extracted_name.lower() == "unknown":
             debug_log("GPT couldn't identify a name")
+            # If GPT fails, try one more fallback - just use the whole message if it's short
+            if len(transcript.split()) <= 4:
+                clean_name = transcript.strip().title()
+                debug_log(f"Using entire message as name: '{clean_name}'")
+                return clean_name
             return None
             
         return extracted_name
         
     except Exception as e:
         debug_log(f"Error in GPT name extraction: {e}")
+        # In case of API error, treat the whole input as a name if it's short enough
+        if len(transcript.split()) <= 4:
+            clean_name = transcript.strip().title()
+            debug_log(f"Using entire message as name due to API error: '{clean_name}'")
+            return clean_name
         return None
 
 def extract_phone(transcript):
@@ -992,12 +1021,18 @@ def appointment_agent(state):
                 # Increment attempt counter
                 context["attempts"]["name"] = context["attempts"].get("name", 0) + 1
                 
-                # If too many failed attempts, try to move forward anyway
-                if context["attempts"]["name"] >= 3:
-                    debug_log("Max attempts reached for name, using transcript as fallback")
-                    # Use a cleaned version of the transcript as a last resort
+                # If we reach max attempts or the input is very simple (likely just a name)
+                if context["attempts"]["name"] >= 2 or len(transcript.split()) <= 4:
+                    debug_log("Using transcript as fallback for name")
+                    # Use a cleaned version of the transcript as a fallback
                     name = re.sub(r'^\s*(my name is|i am|this is|i\'m)\s+', '', transcript.lower())
                     name = name.strip().title()
+                    
+                    # If still empty after cleaning, use original transcript
+                    if not name:
+                        name = transcript.strip().title()
+                    
+                    debug_log(f"Fallback name: {name}")
                     context["patient_name"] = name if name else "Unknown Patient"
                     context["state"] = STATES["COLLECTING_PHONE"]
                     state["response"] = get_step_prompt("collecting_phone", context)
@@ -1240,6 +1275,7 @@ def appointment_agent(state):
             if confirmation:
                 try:
                     # Save patient information
+                    debug_log(f"Attempting to create patient with: name={context['patient_name']}, phone={context['patient_phone']}, email={context['patient_email']}, birthdate={context['patient_birthdate']}")
                     patient_id = Patient.create(
                         name=context["patient_name"],
                         phone=context["patient_phone"],
@@ -1249,6 +1285,7 @@ def appointment_agent(state):
                     debug_log(f"Created patient with ID: {patient_id}")
                     
                     # Book the appointment
+                    debug_log(f"Attempting to create appointment with: patient_id={patient_id}, doctor_id={context['selected_doctor_id']}, date={context['appointment_date']}, time={context['appointment_time']}, reason={context['appointment_reason']}")
                     appointment_result = Appointment.create(
                         patient_id=patient_id,
                         doctor_id=context["selected_doctor_id"],
@@ -1285,7 +1322,38 @@ def appointment_agent(state):
                         "reason": context["appointment_reason"]
                     }
                 except Exception as e:
-                    debug_log(f"Error creating appointment: {e}")
+                    debug_log(f"Error creating appointment: {str(e)}")
+                    debug_log(f"Current context: {context}")
+                    
+                    # Try to continue anyway instead of showing an error
+                    # First check if we already created the patient
+                    try:
+                        if patient_id:
+                            # We got this far, so try scheduling appointment anyway
+                            debug_log("Patient was created but appointment failed - trying again with simplified approach")
+                            
+                            try:
+                                appointment_result = Appointment.create(
+                                    patient_id=patient_id,
+                                    doctor_id=context["selected_doctor_id"],
+                                    date=context["appointment_date"],
+                                    time=context["appointment_time"],
+                                    reason=context["appointment_reason"]
+                                )
+                                appointment_id = appointment_result["appointment_id"]
+                                
+                                # Format date for display
+                                formatted_date = datetime.datetime.strptime(context["appointment_date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                                
+                                context["state"] = STATES["COMPLETED"]
+                                state["response"] = f"Your appointment has been scheduled for {formatted_date} at {context['appointment_time']}. Your appointment ID is {appointment_id}."
+                                return state
+                            except Exception as inner_e:
+                                debug_log(f"Second attempt at creating appointment failed: {str(inner_e)}")
+                    except Exception as backup_e:
+                        debug_log(f"Error in backup scheduling logic: {str(backup_e)}")
+                    
+                    # If we get here, all attempts failed
                     state["response"] = "I encountered an error while trying to book your appointment. Please try again later or contact our office directly."
                     context["state"] = STATES["INITIAL"]
             else:
