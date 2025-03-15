@@ -4,9 +4,10 @@ from langfuse.client import Langfuse
 import datetime
 import json
 import re
-from app.models import Patient, Doctor, Appointment, patients_collection, doctors_collection
+from app.models import Patient, Doctor, Appointment, patients_collection, doctors_collection, appointments_collection
 import random
 from dateutil import parser
+from bson.objectid import ObjectId
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -1144,50 +1145,96 @@ def get_doctor_available_slots(doctor_id, date_str):
     debug_log(f"Getting available slots for doctor {doctor_id} on date: {date_str}")
     
     try:
-        # Get the doctor from the database
+        # Get the doctor from the database - ensure we convert string ID to ObjectID if needed
+        if isinstance(doctor_id, str) and not doctor_id.startswith('ObjectId'):
+            try:
+                doctor_id = ObjectId(doctor_id)
+                debug_log(f"Converted string ID to ObjectID: {doctor_id}")
+            except Exception as e:
+                debug_log(f"Error converting doctor_id to ObjectID: {e}")
+        
+        debug_log(f"Looking up doctor with ID: {doctor_id}")
         doctor = doctors_collection.find_one({"_id": doctor_id})
+        
         if not doctor:
             debug_log(f"Doctor not found with ID: {doctor_id}")
             return []
             
-        debug_log(f"Found doctor: {doctor.get('name', 'Unknown')}")
+        debug_log(f"Found doctor: {doctor.get('name', 'Unknown')} with data: {doctor}")
         
         # Check if doctor has slots for this date
         available_slots = []
         if "available_slots" in doctor and date_str in doctor["available_slots"]:
-            # Get raw slots from doctor's schedule
+            # Get raw slots directly from doctor's schedule for this date
             raw_slots = doctor["available_slots"][date_str]
-            debug_log(f"Raw slots from doctor's schedule: {raw_slots}")
-            
-            # Format slots for display
-            for slot in raw_slots:
-                try:
-                    # Convert database format to display format
-                    if ":" in slot:
-                        hour, minute = slot.split(":")
-                        hour = int(hour)
-                    else:
-                        hour = int(slot)
-                        minute = "00"
-                        
-                    # Convert to 12-hour format
-                    if hour >= 12:
-                        period = "PM"
-                        display_hour = hour - 12 if hour > 12 else hour
-                    else:
-                        period = "AM"
-                        display_hour = hour if hour > 0 else 12
-                        
-                    formatted_slot = f"{display_hour}:{minute} {period}"
-                    available_slots.append(formatted_slot)
-                except Exception as e:
-                    debug_log(f"Error formatting slot {slot}: {e}")
+            debug_log(f"Raw slots from doctor's schedule for {date_str}: {raw_slots}")
         else:
-            debug_log(f"No slots found for date {date_str} in doctor's schedule")
+            # Date not explicitly in schedule - check if we can infer from patterns
+            debug_log(f"No slots explicitly found for date {date_str} in doctor's schedule")
+            
+            # Check if doctor has any available_slots to infer a pattern from
+            if "available_slots" in doctor and doctor["available_slots"]:
+                # Get the first available date as a pattern
+                first_date = list(doctor["available_slots"].keys())[0]
+                raw_slots = doctor["available_slots"][first_date]
+                debug_log(f"Using slots from {first_date} as a pattern: {raw_slots}")
+                
+                # Make sure we're not using slots for a weekend if the requested date is a weekday or vice versa
+                requested_date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                pattern_date = datetime.datetime.strptime(first_date, "%Y-%m-%d")
+                
+                # If weekday/weekend status doesn't match, try to find another pattern
+                if (requested_date.weekday() >= 5) != (pattern_date.weekday() >= 5):
+                    # Try to find a date with matching weekday/weekend status
+                    for alt_date, alt_slots in doctor["available_slots"].items():
+                        alt_date_obj = datetime.datetime.strptime(alt_date, "%Y-%m-%d")
+                        if (alt_date_obj.weekday() >= 5) == (requested_date.weekday() >= 5):
+                            raw_slots = alt_slots
+                            debug_log(f"Found better matching pattern from {alt_date}: {raw_slots}")
+                            break
+            else:
+                debug_log(f"Doctor has no available_slots data to infer from")
+                raw_slots = []
+        
+        # Format slots for display
+        for slot in raw_slots:
+            try:
+                # Parse the time format from database
+                if ":" in slot:
+                    hour, minute = slot.split(":")
+                    hour = int(hour)
+                    minute = minute.zfill(2)  # Ensure two digits
+                else:
+                    hour = int(slot)
+                    minute = "00"
+                
+                # Convert to 12-hour format
+                if hour == 0:
+                    display_hour = 12
+                    period = "AM"
+                elif hour < 12:
+                    display_hour = hour
+                    period = "AM"
+                elif hour == 12:
+                    display_hour = 12
+                    period = "PM"
+                else:
+                    display_hour = hour - 12
+                    period = "PM"
+                
+                # Format time as 12-hour format with AM/PM
+                formatted_slot = f"{display_hour}:{minute} {period}"
+                available_slots.append(formatted_slot)
+                debug_log(f"Converted {slot} to {formatted_slot}")
+            except Exception as e:
+                debug_log(f"Error formatting slot {slot}: {e}")
         
         # Check existing appointments for this doctor on this date
+        doctor_id_str = str(doctor_id)
+        debug_log(f"Searching for appointments with doctor_id: {doctor_id_str}")
+        
         appointments = appointments_collection.find({
-            "doctor_id": doctor_id,
+            "doctor_id": doctor_id_str,  # Convert ObjectId to string for comparison
             "date": date_str,
             "status": {"$nin": ["cancelled"]}
         })
@@ -1202,11 +1249,13 @@ def get_doctor_available_slots(doctor_id, date_str):
         # Sort by time
         available_slots.sort(key=lambda x: datetime.datetime.strptime(x, "%I:%M %p"))
         
-        debug_log(f"Available slots after removing booked ones: {available_slots}")
+        debug_log(f"Final available slots: {available_slots}")
         return available_slots
         
     except Exception as e:
-        debug_log(f"Error getting doctor's available slots: {e}")
+        debug_log(f"Error getting doctor's available slots: {str(e)}")
+        import traceback
+        debug_log(f"Traceback: {traceback.format_exc()}")
         return []
 
 def appointment_agent(state):
@@ -1822,21 +1871,43 @@ def appointment_agent(state):
             if appointment_id:
                 # Look up the appointment
                 appointment = Appointment.find_by_appointment_id(appointment_id)
+                debug_log(f"Found appointment: {appointment}")
+                
                 if appointment:
                     # Get more details about the appointment
                     try:
                         patient = patients_collection.find_one({"_id": appointment["patient_id"]})
                         doctor_id = appointment["doctor_id"]
-                        doctor = doctors_collection.find_one({"_id": doctor_id})
+                        debug_log(f"Original doctor_id from appointment: {doctor_id} (type: {type(doctor_id)})")
+                        
+                        # Ensure doctor_id is properly formatted for lookup
+                        if isinstance(doctor_id, str) and not doctor_id.startswith('ObjectId'):
+                            try:
+                                debug_log(f"Converting string doctor_id to ObjectId: {doctor_id}")
+                                doctor_id_obj = ObjectId(doctor_id)
+                                doctor = doctors_collection.find_one({"_id": doctor_id_obj})
+                                debug_log(f"Doctor lookup result with ObjectId: {doctor}")
+                                if not doctor:
+                                    # If conversion fails, try as string
+                                    doctor = doctors_collection.find_one({"_id": doctor_id})
+                                    debug_log(f"Doctor lookup result with string: {doctor}")
+                            except Exception as e:
+                                debug_log(f"Error converting doctor_id: {e}")
+                                # If conversion fails, try as string
+                                doctor = doctors_collection.find_one({"_id": doctor_id})
+                                debug_log(f"Doctor lookup result with string: {doctor}")
+                        else:
+                            doctor = doctors_collection.find_one({"_id": doctor_id})
+                            debug_log(f"Doctor lookup result: {doctor}")
                         
                         # Format date for display
                         formatted_date = datetime.datetime.strptime(appointment["date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
                         
-                        # Save to context
+                        # Save to context - store doctor_id as string to avoid JSON serialization issues
                         context["reschedule_appointment_id"] = appointment_id
                         context["reschedule_appointment"] = {
                             "doctor_name": doctor["name"] if doctor else "Unknown Doctor",
-                            "doctor_id": doctor_id,
+                            "doctor_id": str(doctor_id_obj) if 'doctor_id_obj' in locals() else str(doctor_id),
                             "formatted_date": formatted_date,
                             "date": appointment["date"],
                             "time": appointment["time"],
