@@ -933,7 +933,7 @@ def appointment_agent(state):
             else:
                 # Select the first doctor for demo purposes
                 # In a real app, you would let the user choose
-                context["selected_doctor_id"] = doctors[0]["_id"]
+                context["selected_doctor_id"] = str(doctors[0]["_id"])  # Convert ObjectId to string
                 context["state"] = STATES["COLLECTING_DATE_TIME"]
                 
                 # Get available dates for this doctor
