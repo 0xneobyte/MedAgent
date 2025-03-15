@@ -731,9 +731,9 @@ def get_step_prompt(step_name, context=None):
             "Let's start booking your appointment. What's your full name?"
         ],
         "collecting_phone": [
-            "Thank you, {}. Could you please provide your phone number?",
-            "Great, {}. What's the best phone number to reach you?",
-            "Thanks {}. Now I need your phone number for our records."
+            "Thank you, {patient_name}. Could you please provide your phone number?",
+            "Great, {patient_name}. What's the best phone number to reach you?",
+            "Thanks {patient_name}. Now I need your phone number for our records."
         ],
         "collecting_birthdate": [
             "Thank you. Now, could you please share your date of birth in YYYY-MM-DD format?",
@@ -791,15 +791,53 @@ def get_step_prompt(step_name, context=None):
     variations = prompts.get(step_name, ["I'm sorry, I'm not sure what information I need next."])
     prompt = random.choice(variations)
     
+    # Special handling for empty context
+    if not context:
+        return prompt
+        
+    # Handle the most common case directly without complex formatting
+    if step_name == "collecting_phone" and "patient_name" in context:
+        patient_name = context["patient_name"]
+        return f"Thank you, {patient_name}. Could you please provide your phone number?"
+        
     # Format with context if needed and available
-    if context:
-        try:
-            # Properly format the string with the context
-            prompt = prompt.format(**context)
-        except KeyError as e:
-            debug_log(f"Error formatting prompt: missing key {e}")
-            # Fall back to unformatted prompt
-            pass
+    try:
+        # Extract only needed variables to prevent KeyErrors 
+        format_vars = {}
+        
+        # Find all format placeholders in the prompt
+        placeholders = re.findall(r'\{(\w+)\}', prompt)
+        
+        # Only include the variables that are actually needed
+        for placeholder in placeholders:
+            if placeholder in context and context[placeholder] is not None:
+                format_vars[placeholder] = context[placeholder]
+            else:
+                # Handle missing variables specially
+                if placeholder == "patient_name":
+                    format_vars[placeholder] = "there"
+                else:
+                    format_vars[placeholder] = ""
+        
+        # Now safely format the prompt with just the needed variables
+        prompt = prompt.format(**format_vars)
+        
+    except Exception as e:
+        # If formatting fails, return a safe alternative based on step name
+        debug_log(f"Error formatting prompt: {e}")
+        
+        # Create safe fallbacks for common steps
+        if step_name == "collecting_phone":
+            patient_name = context.get("patient_name", "there")
+            return f"Thank you, {patient_name}. Could you please provide your phone number?"
+        elif step_name == "collecting_birthdate":
+            return "Thank you. Now, could you please share your date of birth in YYYY-MM-DD format?"
+        elif step_name == "collecting_email":
+            return "Please provide your email address for appointment confirmation."
+        elif step_name == "collecting_reason":
+            return "What's the reason for your visit today?"
+        elif "confirming" in step_name:
+            return "Is this information correct? Please confirm with yes or no."
         
     return prompt
 
@@ -1009,14 +1047,29 @@ def appointment_agent(state):
         elif context["state"] == STATES["COLLECTING_NAME"]:
             # Extract name from transcript
             debug_log(f"Processing name collection from transcript: '{transcript}'")
-            name = extract_name(transcript)
-            debug_log(f"Extracted name: {name}")
+            
+            # When responding to a direct name question, assume the entire response is likely a name
+            # This is particularly important for simple responses like "John Smith" or "Tharushka Dinujaya"
+            if len(transcript.split()) <= 4 and all(word[0].isalpha() for word in transcript.split()):
+                debug_log("Input appears to be a direct name response")
+                name = transcript.strip().title()
+                debug_log(f"Using direct input as name: '{name}'")
+            else:
+                # Try the normal extraction for more complex inputs
+                name = extract_name(transcript)
+                debug_log(f"Extracted name via normal process: {name}")
             
             if name:
                 context["patient_name"] = name
                 context["state"] = STATES["COLLECTING_PHONE"]
                 context["attempts"]["name"] = 0  # Reset attempts counter
-                state["response"] = get_step_prompt("collecting_phone", context)
+                try:
+                    state["response"] = get_step_prompt("collecting_phone", {"patient_name": name})
+                    debug_log(f"Created phone collection prompt with name: '{name}'")
+                except Exception as e:
+                    debug_log(f"Error formatting phone prompt: {e}")
+                    # Safe fallback to ensure we don't show an error message
+                    state["response"] = f"Thank you, {name}. Could you please provide your phone number?"
             else:
                 # Increment attempt counter
                 context["attempts"]["name"] = context["attempts"].get("name", 0) + 1
@@ -1035,7 +1088,11 @@ def appointment_agent(state):
                     debug_log(f"Fallback name: {name}")
                     context["patient_name"] = name if name else "Unknown Patient"
                     context["state"] = STATES["COLLECTING_PHONE"]
-                    state["response"] = get_step_prompt("collecting_phone", context)
+                    try:
+                        state["response"] = get_step_prompt("collecting_phone", {"patient_name": name})
+                    except Exception as e:
+                        debug_log(f"Error formatting phone prompt for fallback: {e}")
+                        state["response"] = f"Thank you, {name}. Could you please provide your phone number?"
                 else:
                     state["response"] = get_step_prompt("collecting_repeat_name")
         
@@ -1049,19 +1106,39 @@ def appointment_agent(state):
                 context["patient_phone"] = phone
                 context["state"] = STATES["COLLECTING_BIRTHDATE"]
                 context["attempts"]["phone"] = 0  # Reset attempts counter
-                state["response"] = get_step_prompt("collecting_birthdate")
+                try:
+                    state["response"] = get_step_prompt("collecting_birthdate")
+                except Exception as e:
+                    debug_log(f"Error formatting birthdate prompt: {e}")
+                    state["response"] = "Thank you. Now, could you please share your date of birth in YYYY-MM-DD format?"
             else:
                 # Increment attempt counter
                 context["attempts"]["phone"] = context["attempts"].get("phone", 0) + 1
                 
+                # Single letter inputs are almost certainly not phone numbers
+                if len(transcript.strip()) <= 1:
+                    debug_log("Input too short to be a phone number")
+                    try:
+                        state["response"] = get_step_prompt("collecting_repeat_phone")
+                    except Exception as e:
+                        debug_log(f"Error formatting repeat phone prompt: {e}")
+                        state["response"] = "I need a valid phone number with at least 10 digits. Could you please provide it?"
                 # If too many failed attempts, try to move forward anyway
-                if context["attempts"]["phone"] >= 3:
+                elif context["attempts"]["phone"] >= 3:
                     debug_log("Max attempts reached for phone, using placeholder")
                     context["patient_phone"] = "000-000-0000"  # Placeholder
                     context["state"] = STATES["COLLECTING_BIRTHDATE"]
-                    state["response"] = get_step_prompt("collecting_birthdate")
+                    try:
+                        state["response"] = get_step_prompt("collecting_birthdate")
+                    except Exception as e:
+                        debug_log(f"Error formatting birthdate prompt after max attempts: {e}")
+                        state["response"] = "Thank you. Now, could you please share your date of birth in YYYY-MM-DD format?"
                 else:
-                    state["response"] = get_step_prompt("collecting_repeat_phone")
+                    try:
+                        state["response"] = get_step_prompt("collecting_repeat_phone")
+                    except Exception as e:
+                        debug_log(f"Error formatting repeat phone prompt: {e}")
+                        state["response"] = "I need a valid phone number with at least 10 digits. Could you please provide it?"
         
         elif context["state"] == STATES["COLLECTING_BIRTHDATE"]:
             # Extract birthdate from transcript
@@ -1540,7 +1617,18 @@ def appointment_agent(state):
     except Exception as e:
         trace.update(status="error", error={"message": str(e)})
         debug_log(f"Error in appointment agent: {e}")
-        state["response"] = "I'm having trouble processing your appointment request. Please try again or contact our office directly."
+        
+        # Check if we're in the middle of a state transition and already have key data
+        # This will prevent showing error messages when we're actually making progress
+        if "appointment_context" in state and state["appointment_context"].get("state") == STATES["COLLECTING_PHONE"] and state["appointment_context"].get("patient_name"):
+            # We've already processed the name and are moving to phone collection
+            patient_name = state["appointment_context"]["patient_name"]
+            debug_log(f"Error recovery: Already processed name '{patient_name}', continuing to phone collection")
+            # Use fixed string format instead of template formatting
+            state["response"] = f"Thank you, {patient_name}. Could you please provide your phone number?"
+            return state
+        else:
+            state["response"] = "I'm having trouble processing your appointment request. Please try again or contact our office directly."
     
     return state
 
