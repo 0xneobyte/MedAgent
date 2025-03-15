@@ -702,6 +702,73 @@ def get_step_prompt(step_name, context=None):
         
     return prompt
 
+def extract_date_time_gpt(transcript):
+    """Extract date and time from transcript using GPT"""
+    debug_log(f"Extracting date and time from: '{transcript}'")
+    
+    # Get current date to determine the default year
+    current_year = datetime.datetime.now().year
+    
+    system_prompt = f"""
+    You are a helpful assistant extracting a date and time from a patient's message.
+    The current year is {current_year}. When a year is not specified, use 2025 as the default year.
+    
+    Return your answer in JSON format with the following structure:
+    {{
+        "date": "YYYY-MM-DD",
+        "time": "HH:MM",
+        "action": "schedule"
+    }}
+    
+    For the date, convert all formats to YYYY-MM-DD, ensuring the year is 2025 if not specified.
+    For the time, convert all formats to 24-hour time (HH:MM).
+    For action, use "schedule" by default, "reschedule" if changing an appointment, or "cancel" for cancellation.
+    
+    If you cannot determine a date or time with confidence, set the value to null.
+    
+    Example inputs and outputs:
+    Input: "I want an appointment on March 15 at 2pm"
+    Output: {{"date": "2025-03-15", "time": "14:00", "action": "schedule"}}
+    
+    Input: "Book me for tomorrow afternoon"
+    Output: {{"date": "2025-03-16", "time": "14:00", "action": "schedule"}}
+    
+    Input: "I'd like to come in on the 15th at 2"
+    Output: {{"date": "2025-03-15", "time": "14:00", "action": "schedule"}}
+    
+    Input: "Cancel my appointment on Friday"
+    Output: {{"date": "2025-03-21", "time": null, "action": "cancel"}}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ],
+            temperature=0.1,
+            max_tokens=150,
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        debug_log(f"GPT extracted date/time: {result}")
+        
+        # Ensure the year is 2025 for detected dates
+        if result.get("date") and "-" in result.get("date", ""):
+            parts = result["date"].split("-")
+            if len(parts) == 3 and parts[0] == "2024":
+                # Replace 2024 with 2025
+                result["date"] = f"2025-{parts[1]}-{parts[2]}"
+                debug_log(f"Corrected year to 2025: {result['date']}")
+        
+        return result.get("date"), result.get("time"), result.get("action", "schedule")
+        
+    except Exception as e:
+        debug_log(f"Error in GPT date/time extraction: {e}")
+        return None, None, "schedule"
+
 def appointment_agent(state):
     """
     The main Appointment Agent function for LangGraph
@@ -948,54 +1015,48 @@ def appointment_agent(state):
                 state["response"] = f"I've assigned you to {doctors[0]['name']}, {context['doctor_specialty']}. When would you like to schedule your appointment? We have availability on {dates_str}."
         
         elif context["state"] == STATES["COLLECTING_DATE_TIME"]:
-            # Extract date and time from transcript
+            # Extract date and time from transcript using GPT
             debug_log(f"Processing date/time collection from transcript: '{transcript}'")
-            date_str, time_str, _ = extract_date_time_from_transcript(transcript)
-            debug_log(f"Extracted date_str: {date_str}, time_str: {time_str}")
+            formatted_date, formatted_time, action = extract_date_time_gpt(transcript)
+            debug_log(f"Extracted date: {formatted_date}, time: {formatted_time}, action: {action}")
             
-            if date_str and time_str:
-                formatted_date, formatted_time = parse_date_time(date_str, time_str)
-                debug_log(f"Parsed date: {formatted_date}, time: {formatted_time}")
+            if formatted_date and formatted_time:
+                # Get doctor object
+                try:
+                    doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
+                                  if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                    debug_log(f"Found doctor: {doctor['name'] if doctor else None}")
+                except Exception as e:
+                    debug_log(f"Error finding doctor: {e}")
+                    doctor = None
                 
-                if formatted_date and formatted_time:
-                    # Get doctor object
-                    try:
-                        doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
-                                      if str(d["_id"]) == str(context["selected_doctor_id"])), None)
-                        debug_log(f"Found doctor: {doctor['name'] if doctor else None}")
-                    except Exception as e:
-                        debug_log(f"Error finding doctor: {e}")
-                        doctor = None
-                    
-                    if not doctor:
-                        state["response"] = "I'm sorry, there was an issue with the selected doctor. Let's start over."
-                        context["state"] = STATES["INITIAL"]
-                    else:
-                        # Check if slot is available
-                        try:
-                            available_slots = doctor.get("available_slots", {}).get(formatted_date, [])
-                            debug_log(f"Available slots: {available_slots}")
-                        except Exception as e:
-                            debug_log(f"Error checking available slots: {e}")
-                            available_slots = []
-                        
-                        if formatted_time not in available_slots:
-                            slots_str = ", ".join(available_slots[:5])  # Limit to 5 slots for readability
-                            
-                            if slots_str:
-                                state["response"] = f"I'm sorry, but {formatted_time} is not available on that date. Available time slots are: {slots_str}. Would you like to choose one of these times?"
-                            else:
-                                state["response"] = f"I'm sorry, but there are no available slots on that date. Would you like to try another date?"
-                        else:
-                            context["appointment_date"] = formatted_date
-                            context["appointment_time"] = formatted_time
-                            context["state"] = STATES["COLLECTING_EMAIL"]
-                            
-                            state["response"] = "Great! Now, please provide your email address for the appointment confirmation."
+                if not doctor:
+                    state["response"] = "I'm sorry, there was an issue with the selected doctor. Let's start over."
+                    context["state"] = STATES["INITIAL"]
                 else:
-                    state["response"] = "I couldn't understand the date and time you provided. Could you please specify a date (e.g., Monday, tomorrow) and time (e.g., 2 PM, 14:00)?"
+                    # Check if slot is available
+                    try:
+                        available_slots = doctor.get("available_slots", {}).get(formatted_date, [])
+                        debug_log(f"Available slots: {available_slots}")
+                    except Exception as e:
+                        debug_log(f"Error checking available slots: {e}")
+                        available_slots = []
+                    
+                    if formatted_time not in available_slots:
+                        slots_str = ", ".join(available_slots[:5])  # Limit to 5 slots for readability
+                        
+                        if slots_str:
+                            state["response"] = f"I'm sorry, but {formatted_time} is not available on that date. Available time slots are: {slots_str}. Would you like to choose one of these times?"
+                        else:
+                            state["response"] = f"I'm sorry, but there are no available slots on that date. Would you like to try another date?"
+                    else:
+                        context["appointment_date"] = formatted_date
+                        context["appointment_time"] = formatted_time
+                        context["state"] = STATES["COLLECTING_EMAIL"]
+                        
+                        state["response"] = "Great! Now, please provide your email address for the appointment confirmation."
             else:
-                state["response"] = "I need both a date and time for your appointment. Could you please provide them?"
+                state["response"] = "I need both a date and time for your appointment. Could you please provide them clearly? For example, 'March 15, 2025 at 2pm'."
         
         elif context["state"] == STATES["COLLECTING_EMAIL"]:
             # Extract email from transcript
