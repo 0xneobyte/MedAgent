@@ -762,9 +762,15 @@ def get_step_prompt(step_name, context=None):
     variations = prompts.get(step_name, ["I'm sorry, I'm not sure what information I need next."])
     prompt = random.choice(variations)
     
-    # Format with name if needed and available
-    if "{}" in prompt and context and "patient_name" in context and context["patient_name"]:
-        prompt = prompt.format(context["patient_name"])
+    # Format with context if needed and available
+    if context:
+        try:
+            # Properly format the string with the context
+            prompt = prompt.format(**context)
+        except KeyError as e:
+            debug_log(f"Error formatting prompt: missing key {e}")
+            # Fall back to unformatted prompt
+            pass
         
     return prompt
 
@@ -1297,7 +1303,25 @@ def appointment_agent(state):
                     # Get more details about the appointment
                     try:
                         patient = patients_collection.find_one({"_id": appointment["patient_id"]})
-                        doctor = doctors_collection.find_one({"_id": appointment["doctor_id"]})
+                        
+                        # Improved doctor lookup
+                        doctor = None
+                        doctor_id = appointment.get("doctor_id")
+                        if doctor_id:
+                            # Try to find doctor directly
+                            if isinstance(doctor_id, str):
+                                # Handle string ID (could be ObjectId string)
+                                doctor = doctors_collection.find_one({"_id": doctor_id})
+                                if not doctor:
+                                    # Try lookup by specialty
+                                    doctors = Doctor.find_by_specialty("General Practitioner")
+                                    if doctors and len(doctors) > 0:
+                                        doctor = doctors[0]
+                
+                        # Default doctor name if lookup fails
+                        doctor_name = "Dr. Smith"
+                        if doctor and "name" in doctor:
+                            doctor_name = doctor["name"]
                         
                         # Format date for display
                         formatted_date = datetime.datetime.strptime(appointment["date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
@@ -1305,7 +1329,7 @@ def appointment_agent(state):
                         # Save to context
                         context["cancellation_appointment_id"] = appointment_id
                         context["cancellation_appointment"] = {
-                            "doctor_name": doctor["name"] if doctor else "Unknown Doctor",
+                            "doctor_name": doctor_name,
                             "formatted_date": formatted_date,
                             "time": appointment["time"],
                             "patient_name": patient["name"] if patient else "Unknown Patient"
@@ -1336,7 +1360,12 @@ def appointment_agent(state):
                     if success:
                         # Format a nice response with appointment details
                         appointment_details = context["cancellation_appointment"]
-                        state["response"] = f"I've cancelled your appointment with {appointment_details['doctor_name']} on {appointment_details['formatted_date']} at {appointment_details['time']}. Thank you for letting us know."
+                        doctor_name = appointment_details.get('doctor_name', 'Unknown Doctor')
+                        formatted_date = appointment_details.get('formatted_date', 'Unknown Date')
+                        time = appointment_details.get('time', 'Unknown Time')
+                        
+                        # Construct response with available details
+                        state["response"] = f"I've cancelled your appointment with {doctor_name} on {formatted_date} at {time}. Thank you for letting us know."
                         
                         # Reset the state
                         context["state"] = STATES["INITIAL"]
