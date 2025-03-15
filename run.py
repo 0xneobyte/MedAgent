@@ -22,4 +22,5 @@ if __name__ == "__main__":
     
     print("Starting MedAgent - AI Healthcare Assistant")
     print("Visit http://localhost:5001 to use the application")
-    app.run(debug=True, host="0.0.0.0", port=5001) 
+    # Disable auto-reloader to prevent in-memory conversation_store from being reset
+    app.run(debug=True, host="0.0.0.0", port=5001, use_reloader=False) 

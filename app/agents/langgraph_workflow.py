@@ -15,6 +15,7 @@ class WorkflowState(TypedDict):
     appointment_details: Dict[str, Any]
     conversation_in_progress: bool
     original_intent: str
+    appointment_context: Dict[str, Any]
 
 # Wrap the receptionist agent to preserve intent
 def receptionist_agent_wrapper(state):
@@ -109,5 +110,21 @@ def process_workflow(input_state):
         input_state["conversation_in_progress"] = False
     if "original_intent" not in input_state:
         input_state["original_intent"] = ""
+    if "appointment_context" not in input_state:
+        input_state["appointment_context"] = {}
     
-    return workflow.invoke(input_state) 
+    # Run the workflow
+    final_state = workflow.invoke(input_state)
+    
+    # Ensure appointment_context is preserved in the final state
+    if "appointment_context" in input_state and "appointment_context" not in final_state:
+        final_state["appointment_context"] = input_state["appointment_context"]
+        
+    # Important: If the appointment agent created or updated the appointment_context, make sure it's in the final state
+    if isinstance(final_state, dict) and "appointment_context" not in final_state and any(key == "appointment_context" for key in final_state):
+        for key in final_state:
+            if key == "appointment_context":
+                final_state["appointment_context"] = final_state[key]
+                break
+    
+    return final_state 

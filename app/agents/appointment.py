@@ -5,6 +5,7 @@ import datetime
 import json
 import re
 from app.models import Patient, Doctor, Appointment
+import random
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -167,11 +168,11 @@ def parse_date_time(date_str, time_str):
              lambda m: f"{int(m.group(1)) % 12:02d}:00"),
              
             # 2:30 p.m. or 2.30pm
-            (r'(\d{1,2})[:\.](\d{2})\s*(p\.?m\.?)', 
+            (r'(\d{1,2})[:\.](\d{2})\s*(p\.?m\.?)\b', 
              lambda m: f"{(int(m.group(1)) % 12) + 12}:{m.group(2)}"),
              
             # 2:30 a.m. or 2.30am
-            (r'(\d{1,2})[:\.](\d{2})\s*(a\.?m\.?)', 
+            (r'(\d{1,2})[:\.](\d{2})\s*(a\.?m\.?)\b', 
              lambda m: f"{int(m.group(1)) % 12:02d}:{m.group(2)}"),
              
             # 14:00 or 14.00 (24-hour format)
@@ -412,127 +413,153 @@ def extract_date_time_from_transcript(transcript):
     return date_str, time_str, action
 
 def extract_name(transcript):
-    """Extract patient name from transcript"""
-    # Simple extraction using GPT
+    """Extract name from transcript using GPT"""
+    debug_log(f"Extracting name from: '{transcript}'")
+    
     system_prompt = """
     You are a helpful assistant extracting a patient's name from their message.
     Return ONLY the name without any additional text or explanation.
-    If you cannot determine a name, respond with "Unknown".
+    If you cannot determine a name with high confidence, respond with "Unknown".
+    
+    Example inputs and outputs:
+    Input: "My name is John Smith"
+    Output: John Smith
+    
+    Input: "I'm Alex Muske"
+    Output: Alex Muske
+    
+    Input: "This is Sarah Johnson"
+    Output: Sarah Johnson
+    
+    Input: "I'd like to book an appointment"
+    Output: Unknown
     """
     
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcript}
-        ],
-        temperature=0.1,
-        max_tokens=50
-    )
-    
-    name = response.choices[0].message.content.strip()
-    if name.lower() == "unknown":
-        return None
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ],
+            temperature=0.1,
+            max_tokens=50
+        )
         
-    return name
+        extracted_name = response.choices[0].message.content.strip()
+        debug_log(f"GPT extracted name: '{extracted_name}'")
+        
+        if extracted_name.lower() == "unknown":
+            debug_log("GPT couldn't identify a name")
+            return None
+            
+        return extracted_name
+        
+    except Exception as e:
+        debug_log(f"Error in GPT name extraction: {e}")
+        return None
 
 def extract_phone(transcript):
-    """Extract phone number from transcript"""
-    # Try regex first for common formats
-    phone_patterns = [
-        r'\b(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b',  # 123-456-7890, 123.456.7890, 123 456 7890
-        r'\b(\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4})\b',  # (123)-456-7890, (123).456.7890, (123) 456 7890
-        r'\b(\+\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b',  # +1-123-456-7890
-    ]
+    """Extract phone number from transcript using GPT"""
+    debug_log(f"Extracting phone number from: '{transcript}'")
     
-    for pattern in phone_patterns:
-        match = re.search(pattern, transcript)
-        if match:
-            # Remove non-numeric characters
-            phone = re.sub(r'\D', '', match.group(1))
-            return phone
-    
-    # If regex fails, try GPT extraction
     system_prompt = """
-    You are a helpful assistant extracting a phone number from a message.
-    Return ONLY the phone number without any additional text or explanation.
-    Format the number as a continuous string of digits without spaces or special characters.
-    If you cannot determine a phone number, respond with "Unknown".
+    You are a helpful assistant extracting a phone number from a patient's message.
+    Return ONLY the phone number, formatted with appropriate dashes or spaces.
+    If you cannot identify a phone number with high confidence, respond with "Unknown".
+    
+    Example inputs and outputs:
+    Input: "My phone number is 123-456-7890"
+    Output: 123-456-7890
+    
+    Input: "You can call me at (077) 598-2859"
+    Output: 077-598-2859
+    
+    Input: "I'm at +44 7911 123456"
+    Output: +44-7911-123456
+    
+    Input: "I'd like to book an appointment"
+    Output: Unknown
     """
     
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcript}
-        ],
-        temperature=0.1,
-        max_tokens=20
-    )
-    
-    phone = response.choices[0].message.content.strip()
-    if phone.lower() == "unknown":
-        return None
-    
-    # Remove any non-numeric characters
-    phone = re.sub(r'\D', '', phone)
-    if len(phone) < 10:  # Ensure it's a valid phone number
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ],
+            temperature=0.1,
+            max_tokens=50
+        )
+        
+        extracted = response.choices[0].message.content.strip()
+        debug_log(f"GPT extracted phone: '{extracted}'")
+        
+        if extracted.lower() == "unknown":
+            debug_log("GPT couldn't identify a phone number")
+            return None
+            
+        # Ensure the extracted text contains digits
+        if any(c.isdigit() for c in extracted):
+            return extracted
+        
         return None
         
-    return phone
+    except Exception as e:
+        debug_log(f"Error in GPT phone extraction: {e}")
+        return None
 
 def extract_birthdate(transcript):
-    """Extract birthdate from transcript"""
-    # Try regex for common date formats
-    date_patterns = [
-        r'\b(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b',  # MM/DD/YYYY, DD/MM/YYYY
-        r'\b(\d{4}[-/]\d{1,2}[-/]\d{1,2})\b',  # YYYY/MM/DD
-        r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b'  # Month DD, YYYY
-    ]
+    """Extract birth date from transcript using GPT"""
+    debug_log(f"Extracting birthdate from: '{transcript}'")
     
-    for pattern in date_patterns:
-        match = re.search(pattern, transcript, re.IGNORECASE)
-        if match:
-            try:
-                # Try to parse the date
-                date_str = match.group(1)
-                # Various parsing attempts based on format
-                for fmt in ["%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%m-%d-%Y", "%d-%m-%Y", "%Y-%m-%d"]:
-                    try:
-                        date_obj = datetime.datetime.strptime(date_str, fmt)
-                        # Return in YYYY-MM-DD format
-                        return date_obj.strftime("%Y-%m-%d")
-                    except ValueError:
-                        continue
-            except:
-                pass
-    
-    # If regex fails, try GPT extraction
     system_prompt = """
-    You are a helpful assistant extracting a birthdate from a message.
-    Return ONLY the date in YYYY-MM-DD format without any additional text or explanation.
-    If you cannot determine a date, respond with "Unknown".
+    You are a helpful assistant extracting a birth date from a patient's message.
+    Return ONLY the date in YYYY-MM-DD format without any additional text.
+    If you cannot determine a birth date with confidence, respond with "Unknown".
+    
+    Example inputs and outputs:
+    Input: "I was born on 1980-01-15"
+    Output: 1980-01-15
+    
+    Input: "My birth date is January 15, 1980"
+    Output: 1980-01-15
+    
+    Input: "DOB: 01/15/1980"
+    Output: 1980-01-15
+    
+    Input: "I'd like to book an appointment"
+    Output: Unknown
     """
     
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcript}
-        ],
-        temperature=0.1,
-        max_tokens=20
-    )
-    
-    date = response.choices[0].message.content.strip()
-    if date.lower() == "unknown":
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ],
+            temperature=0.1,
+            max_tokens=50
+        )
+        
+        extracted_date = response.choices[0].message.content.strip()
+        debug_log(f"GPT extracted date: '{extracted_date}'")
+        
+        if extracted_date.lower() == "unknown":
+            debug_log("GPT couldn't identify a date")
+            return None
+            
+        # Validate that it's in YYYY-MM-DD format
+        date_pattern = r'^\d{4}-\d{2}-\d{2}$'
+        if re.match(date_pattern, extracted_date):
+            return extracted_date
+            
         return None
         
-    # Validate the date format
-    try:
-        datetime.datetime.strptime(date, "%Y-%m-%d")
-        return date
-    except ValueError:
+    except Exception as e:
+        debug_log(f"Error in GPT date extraction: {e}")
         return None
 
 def extract_email(transcript):
@@ -592,22 +619,88 @@ def extract_reason(transcript):
     return reason
 
 def validate_birthdate(birthdate):
-    """Validate birthdate format and ensure it's a past date"""
+    """Validate that the birthdate is a valid date and reasonable (not too recent or old)"""
     try:
-        date_obj = datetime.datetime.strptime(birthdate, "%Y-%m-%d")
-        today = datetime.datetime.now()
-        
-        # Check if date is in the past and not more than 120 years ago
-        if date_obj > today:
+        if not birthdate:
             return False
+            
+        # Validate format
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', birthdate):
+            return False
+            
+        # Parse the date
+        date_obj = datetime.datetime.strptime(birthdate, "%Y-%m-%d")
         
-        max_age = today - datetime.timedelta(days=365 * 120)
-        if date_obj < max_age:
+        # Ensure it's not in the future
+        if date_obj > datetime.datetime.now():
+            return False
+            
+        # Ensure it's not unreasonably old (200 years ago)
+        if date_obj < datetime.datetime.now() - datetime.timedelta(days=365*200):
+            return False
+            
+        # Get the year to check age range
+        current_year = datetime.datetime.now().year
+        birth_year = date_obj.year
+        age = current_year - birth_year
+        
+        # Typical patient age range check (0-120 years)
+        if age < 0 or age > 120:
             return False
             
         return True
     except ValueError:
         return False
+
+def get_step_prompt(step_name, context=None):
+    """Get appropriate prompts for different steps in the appointment workflow"""
+    prompts = {
+        "collecting_name": [
+            "I'd be happy to help you schedule an appointment. Could you please tell me your full name?",
+            "To book your appointment, I'll need your full name please.",
+            "Let's start booking your appointment. What's your full name?"
+        ],
+        "collecting_phone": [
+            "Thank you, {}. Could you please provide your phone number?",
+            "Great, {}. What's the best phone number to reach you?",
+            "Thanks {}. Now I need your phone number for our records."
+        ],
+        "collecting_birthdate": [
+            "Thank you. Now, could you please share your date of birth in YYYY-MM-DD format?",
+            "I'll need your date of birth. Please provide it in YYYY-MM-DD format.",
+            "Next, what's your date of birth? Please use YYYY-MM-DD format."
+        ],
+        "collecting_reason": [
+            "Thank you. What's the reason for your visit today?",
+            "Now, could you tell me the reason for your appointment?",
+            "What health concern brings you in today?"
+        ],
+        "collecting_repeat_name": [
+            "I'm sorry, I couldn't understand your name. Could you please repeat it?",
+            "I didn't catch your name properly. Could you please say it again?",
+            "Could you please provide your full name again?"
+        ],
+        "collecting_repeat_phone": [
+            "I need a valid phone number with at least 10 digits. Could you please provide it?",
+            "Sorry, I couldn't recognize that as a phone number. Please provide a valid phone number.",
+            "Please enter a complete phone number with area code."
+        ],
+        "collecting_repeat_birthdate": [
+            "I need a valid birth date in YYYY-MM-DD format (e.g., 1980-01-15). Could you please provide it?",
+            "That birth date format wasn't recognizable. Please use YYYY-MM-DD format.",
+            "Please enter your date of birth in YYYY-MM-DD format. For example, January 15, 1980 would be 1980-01-15."
+        ]
+    }
+    
+    # Get random variation of the prompt for the requested step
+    variations = prompts.get(step_name, ["I'm sorry, I'm not sure what information I need next."])
+    prompt = random.choice(variations)
+    
+    # Format with name if needed and available
+    if "{}" in prompt and context and "patient_name" in context and context["patient_name"]:
+        prompt = prompt.format(context["patient_name"])
+        
+    return prompt
 
 def appointment_agent(state):
     """
@@ -638,8 +731,11 @@ def appointment_agent(state):
             state["response"] = "I'm not sure I understand what you need. Are you trying to schedule an appointment?"
             return state
         
-        # Initialize appointment context in the state if it doesn't exist
-        if "appointment_context" not in state:
+        debug_log(f"Appointment agent received state: {state}")
+        
+        # Initialize appointment context in the state if it doesn't exist or is empty
+        if "appointment_context" not in state or not state["appointment_context"]:
+            debug_log("Creating new appointment_context")
             state["appointment_context"] = {
                 "state": STATES["INITIAL"],
                 "patient_name": None,
@@ -650,53 +746,115 @@ def appointment_agent(state):
                 "doctor_specialty": None,
                 "selected_doctor_id": None,
                 "appointment_date": None,
-                "appointment_time": None
+                "appointment_time": None,
+                "attempts": {
+                    "name": 0,
+                    "phone": 0,
+                    "birthdate": 0,
+                    "reason": 0
+                }
             }
+        else:
+            debug_log(f"Using existing appointment_context: {state['appointment_context']}")
+            # Initialize attempts counter if it doesn't exist
+            if "attempts" not in state["appointment_context"]:
+                state["appointment_context"]["attempts"] = {
+                    "name": 0,
+                    "phone": 0,
+                    "birthdate": 0,
+                    "reason": 0
+                }
         
         context = state["appointment_context"]
+        debug_log(f"Current appointment state: {context['state']}")
         
         # Determine action based on current state
         if context["state"] == STATES["INITIAL"]:
             # Transition to name collection
+            debug_log("Transitioning from INITIAL to COLLECTING_NAME")
             context["state"] = STATES["COLLECTING_NAME"]
-            state["response"] = "I'd be happy to help you schedule an appointment. Could you please tell me your full name?"
+            state["response"] = get_step_prompt("collecting_name")
         
         elif context["state"] == STATES["COLLECTING_NAME"]:
             # Extract name from transcript
+            debug_log(f"Processing name collection from transcript: '{transcript}'")
             name = extract_name(transcript)
+            debug_log(f"Extracted name: {name}")
             
             if name:
                 context["patient_name"] = name
                 context["state"] = STATES["COLLECTING_PHONE"]
-                state["response"] = f"Thank you, {name}. Could you please provide your phone number?"
+                context["attempts"]["name"] = 0  # Reset attempts counter
+                state["response"] = get_step_prompt("collecting_phone", context)
             else:
-                state["response"] = "I need your full name to schedule an appointment. Could you please provide it?"
+                # Increment attempt counter
+                context["attempts"]["name"] = context["attempts"].get("name", 0) + 1
+                
+                # If too many failed attempts, try to move forward anyway
+                if context["attempts"]["name"] >= 3:
+                    debug_log("Max attempts reached for name, using transcript as fallback")
+                    # Use a cleaned version of the transcript as a last resort
+                    name = re.sub(r'^\s*(my name is|i am|this is|i\'m)\s+', '', transcript.lower())
+                    name = name.strip().title()
+                    context["patient_name"] = name if name else "Unknown Patient"
+                    context["state"] = STATES["COLLECTING_PHONE"]
+                    state["response"] = get_step_prompt("collecting_phone", context)
+                else:
+                    state["response"] = get_step_prompt("collecting_repeat_name")
         
         elif context["state"] == STATES["COLLECTING_PHONE"]:
             # Extract phone from transcript
+            debug_log(f"Processing phone collection from transcript: '{transcript}'")
             phone = extract_phone(transcript)
+            debug_log(f"Extracted phone: {phone}")
             
             if phone:
                 context["patient_phone"] = phone
                 context["state"] = STATES["COLLECTING_BIRTHDATE"]
-                state["response"] = "Thank you. Now, could you please share your date of birth in YYYY-MM-DD format?"
+                context["attempts"]["phone"] = 0  # Reset attempts counter
+                state["response"] = get_step_prompt("collecting_birthdate")
             else:
-                state["response"] = "I need a valid phone number with at least 10 digits. Could you please provide it?"
+                # Increment attempt counter
+                context["attempts"]["phone"] = context["attempts"].get("phone", 0) + 1
+                
+                # If too many failed attempts, try to move forward anyway
+                if context["attempts"]["phone"] >= 3:
+                    debug_log("Max attempts reached for phone, using placeholder")
+                    context["patient_phone"] = "000-000-0000"  # Placeholder
+                    context["state"] = STATES["COLLECTING_BIRTHDATE"]
+                    state["response"] = get_step_prompt("collecting_birthdate")
+                else:
+                    state["response"] = get_step_prompt("collecting_repeat_phone")
         
         elif context["state"] == STATES["COLLECTING_BIRTHDATE"]:
             # Extract birthdate from transcript
+            debug_log(f"Processing birthdate collection from transcript: '{transcript}'")
             birthdate = extract_birthdate(transcript)
+            debug_log(f"Extracted birthdate: {birthdate}")
             
             if birthdate and validate_birthdate(birthdate):
                 context["patient_birthdate"] = birthdate
                 context["state"] = STATES["COLLECTING_REASON"]
-                state["response"] = "Thank you. What's the reason for your visit today?"
+                context["attempts"]["birthdate"] = 0  # Reset attempts counter
+                state["response"] = get_step_prompt("collecting_reason")
             else:
-                state["response"] = "I need a valid birth date in YYYY-MM-DD format (e.g., 1980-01-15). Could you please provide it?"
+                # Increment attempt counter
+                context["attempts"]["birthdate"] = context["attempts"].get("birthdate", 0) + 1
+                
+                # If too many failed attempts, try to move forward anyway
+                if context["attempts"]["birthdate"] >= 3:
+                    debug_log("Max attempts reached for birthdate, using placeholder")
+                    context["patient_birthdate"] = "1980-01-01"  # Default placeholder
+                    context["state"] = STATES["COLLECTING_REASON"]
+                    state["response"] = get_step_prompt("collecting_reason")
+                else:
+                    state["response"] = get_step_prompt("collecting_repeat_birthdate")
         
         elif context["state"] == STATES["COLLECTING_REASON"]:
             # Extract reason from transcript
+            debug_log(f"Processing reason collection from transcript: '{transcript}'")
             reason = extract_reason(transcript)
+            debug_log(f"Extracted reason: {reason}")
             
             if reason:
                 context["appointment_reason"] = reason
@@ -708,10 +866,23 @@ def appointment_agent(state):
                 
                 state["response"] = f"Based on your reason '{reason}', I recommend seeing a {specialty}. Would you like to proceed with this specialist, or would you prefer a different type of doctor?"
             else:
-                state["response"] = "I need to know the reason for your visit. Could you please provide more details?"
+                # Increment attempt counter
+                context["attempts"]["reason"] = context["attempts"].get("reason", 0) + 1
+                
+                # If too many failed attempts, try to move forward with a generic reason
+                if context["attempts"]["reason"] >= 3:
+                    debug_log("Max attempts reached for reason, using placeholder")
+                    context["appointment_reason"] = "general consultation"
+                    specialty = "Primary Care Physician"
+                    context["doctor_specialty"] = specialty
+                    context["state"] = STATES["SUGGESTING_SPECIALTY"]
+                    state["response"] = f"I'll book you for a general consultation with a {specialty}. Would you like to proceed with this specialist, or would you prefer a different type of doctor?"
+                else:
+                    state["response"] = "I need to know the reason for your visit to match you with the right doctor. Could you please provide more details?"
         
         elif context["state"] == STATES["SUGGESTING_SPECIALTY"]:
             # Check if user agrees with the suggested specialty
+            debug_log(f"Processing specialty confirmation from transcript: '{transcript}'")
             agreement_indicators = ["yes", "sure", "okay", "proceed", "that's fine", "sounds good"]
             disagreement_indicators = ["no", "different", "other", "change", "another", "not that"]
             
@@ -722,6 +893,8 @@ def appointment_agent(state):
                 if indicator in transcript.lower():
                     user_agrees = False
                     break
+            
+            debug_log(f"User agrees with specialty: {user_agrees}")
             
             if not user_agrees:
                 # Try to extract a different specialty from the transcript
@@ -744,9 +917,15 @@ def appointment_agent(state):
                 
                 specialty = response.choices[0].message.content.strip()
                 context["doctor_specialty"] = specialty
+                debug_log(f"Changed specialty to: {specialty}")
             
             # Find doctors of this specialty
-            doctors = Doctor.find_by_specialty(context["doctor_specialty"])
+            try:
+                doctors = Doctor.find_by_specialty(context["doctor_specialty"])
+                debug_log(f"Found {len(doctors)} doctors with specialty {context['doctor_specialty']}")
+            except Exception as e:
+                debug_log(f"Error finding doctors: {e}")
+                doctors = []
             
             if not doctors:
                 state["response"] = f"I'm sorry, but we don't have any {context['doctor_specialty']} available at the moment. Would you like to see a General Practitioner instead?"
@@ -770,22 +949,35 @@ def appointment_agent(state):
         
         elif context["state"] == STATES["COLLECTING_DATE_TIME"]:
             # Extract date and time from transcript
+            debug_log(f"Processing date/time collection from transcript: '{transcript}'")
             date_str, time_str, _ = extract_date_time_from_transcript(transcript)
+            debug_log(f"Extracted date_str: {date_str}, time_str: {time_str}")
             
             if date_str and time_str:
                 formatted_date, formatted_time = parse_date_time(date_str, time_str)
+                debug_log(f"Parsed date: {formatted_date}, time: {formatted_time}")
                 
                 if formatted_date and formatted_time:
                     # Get doctor object
-                    doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
-                                  if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                    try:
+                        doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
+                                      if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                        debug_log(f"Found doctor: {doctor['name'] if doctor else None}")
+                    except Exception as e:
+                        debug_log(f"Error finding doctor: {e}")
+                        doctor = None
                     
                     if not doctor:
                         state["response"] = "I'm sorry, there was an issue with the selected doctor. Let's start over."
                         context["state"] = STATES["INITIAL"]
                     else:
                         # Check if slot is available
-                        available_slots = doctor.get("available_slots", {}).get(formatted_date, [])
+                        try:
+                            available_slots = doctor.get("available_slots", {}).get(formatted_date, [])
+                            debug_log(f"Available slots: {available_slots}")
+                        except Exception as e:
+                            debug_log(f"Error checking available slots: {e}")
+                            available_slots = []
                         
                         if formatted_time not in available_slots:
                             slots_str = ", ".join(available_slots[:5])  # Limit to 5 slots for readability
@@ -807,7 +999,9 @@ def appointment_agent(state):
         
         elif context["state"] == STATES["COLLECTING_EMAIL"]:
             # Extract email from transcript
+            debug_log(f"Processing email collection from transcript: '{transcript}'")
             email = extract_email(transcript)
+            debug_log(f"Extracted email: {email}")
             
             if email:
                 context["patient_email"] = email
@@ -817,8 +1011,13 @@ def appointment_agent(state):
                 formatted_date = datetime.datetime.strptime(context["appointment_date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
                 
                 # Get doctor info
-                doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
-                              if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                try:
+                    doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
+                                  if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                    debug_log(f"Found doctor for confirmation: {doctor['name'] if doctor else None}")
+                except Exception as e:
+                    debug_log(f"Error finding doctor for confirmation: {e}")
+                    doctor = {'name': 'Unknown Doctor', 'specialty': context["doctor_specialty"]}
                 
                 # Create confirmation message
                 confirmation = f"Please confirm your appointment details:\n"
@@ -838,47 +1037,58 @@ def appointment_agent(state):
         
         elif context["state"] == STATES["CONFIRMING"]:
             # Check if user confirms
-            if "yes" in transcript.lower() or "confirm" in transcript.lower() or "correct" in transcript.lower():
-                # Save patient information
-                patient_id = Patient.create(
-                    name=context["patient_name"],
-                    phone=context["patient_phone"],
-                    email=context["patient_email"],
-                    birthdate=context["patient_birthdate"]
-                )
-                
-                # Book the appointment
-                appointment_id = Appointment.create(
-                    patient_id=patient_id,
-                    doctor_id=context["selected_doctor_id"],
-                    date=context["appointment_date"],
-                    time=context["appointment_time"],
-                    reason=context["appointment_reason"]
-                )
-                
-                # Format date for display
-                formatted_date = datetime.datetime.strptime(context["appointment_date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
-                
-                # Get doctor info
-                doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
-                              if str(d["_id"]) == str(context["selected_doctor_id"])), None)
-                
-                context["state"] = STATES["COMPLETED"]
-                
-                # Success response
-                state["response"] = f"Great! I've booked your appointment with {doctor['name']} for {formatted_date} at {context['appointment_time']}. A confirmation email has been sent to {context['patient_email']}. Please arrive 15 minutes early to complete any necessary paperwork."
-                
-                # Store appointment details in state for notification agent
-                state["appointment_details"] = {
-                    "patient_name": context["patient_name"],
-                    "patient_email": context["patient_email"],
-                    "doctor_name": doctor["name"],
-                    "doctor_specialty": context["doctor_specialty"],
-                    "date": context["appointment_date"],
-                    "formatted_date": formatted_date,
-                    "time": context["appointment_time"],
-                    "reason": context["appointment_reason"]
-                }
+            debug_log(f"Processing confirmation from transcript: '{transcript}'")
+            confirmation = "yes" in transcript.lower() or "confirm" in transcript.lower() or "correct" in transcript.lower()
+            debug_log(f"User confirmed: {confirmation}")
+            
+            if confirmation:
+                try:
+                    # Save patient information
+                    patient_id = Patient.create(
+                        name=context["patient_name"],
+                        phone=context["patient_phone"],
+                        email=context["patient_email"],
+                        birthdate=context["patient_birthdate"]
+                    )
+                    debug_log(f"Created patient with ID: {patient_id}")
+                    
+                    # Book the appointment
+                    appointment_id = Appointment.create(
+                        patient_id=patient_id,
+                        doctor_id=context["selected_doctor_id"],
+                        date=context["appointment_date"],
+                        time=context["appointment_time"],
+                        reason=context["appointment_reason"]
+                    )
+                    debug_log(f"Created appointment with ID: {appointment_id}")
+                    
+                    # Format date for display
+                    formatted_date = datetime.datetime.strptime(context["appointment_date"], "%Y-%m-%d").strftime("%A, %B %d, %Y")
+                    
+                    # Get doctor info
+                    doctor = next((d for d in Doctor.find_by_specialty(context["doctor_specialty"]) 
+                                  if str(d["_id"]) == str(context["selected_doctor_id"])), None)
+                    
+                    context["state"] = STATES["COMPLETED"]
+                    
+                    # Success response
+                    state["response"] = f"Great! I've booked your appointment with {doctor['name']} for {formatted_date} at {context['appointment_time']}. A confirmation email has been sent to {context['patient_email']}. Please arrive 15 minutes early to complete any necessary paperwork."
+                    
+                    # Store appointment details in state for notification agent
+                    state["appointment_details"] = {
+                        "patient_name": context["patient_name"],
+                        "patient_email": context["patient_email"],
+                        "doctor_name": doctor["name"],
+                        "doctor_specialty": context["doctor_specialty"],
+                        "date": context["appointment_date"],
+                        "formatted_date": formatted_date,
+                        "time": context["appointment_time"],
+                        "reason": context["appointment_reason"]
+                    }
+                except Exception as e:
+                    debug_log(f"Error creating appointment: {e}")
+                    state["response"] = "I encountered an error while trying to book your appointment. Please try again later or contact our office directly."
+                    context["state"] = STATES["INITIAL"]
             else:
                 # Go back to initial state
                 state["response"] = "No problem, let's start over with your appointment booking. What would you like to do?"
@@ -889,6 +1099,10 @@ def appointment_agent(state):
             state["response"] = "I'm here to help with your appointment. What would you like to do?"
             context["state"] = STATES["INITIAL"]
         
+        # Make sure to store the updated context in the state
+        debug_log(f"Saving appointment_context: {context}")
+        state["appointment_context"] = context
+        
         trace.update(status="success")
         
     except Exception as e:
@@ -896,4 +1110,150 @@ def appointment_agent(state):
         debug_log(f"Error in appointment agent: {e}")
         state["response"] = "I'm having trouble processing your appointment request. Please try again or contact our office directly."
     
-    return state 
+    return state
+
+# Test functions for local testing
+def test_extractions():
+    """Test the extraction functions with sample inputs"""
+    # Test name extraction with regex only
+    test_names = [
+        "My name is John Smith",
+        "I'm Alex Muske",
+        "This is Sarah Johnson",
+        "Jane Doe is my name",
+        "Robert"
+    ]
+    
+    print("Testing name extraction:")
+    for test in test_names:
+        # Try regex patterns only
+        name_patterns = [
+            r'(?:my name is|I am|I\'m|call me|it\'s|this is)\s+([A-Z][a-z]+(?:\s+[A-Za-z][a-z]+){0,3})',
+            r'(?:this is|name\'s|I\'m)\s+([A-Z][a-z]+(?:\s+[A-Za-z][a-z]+){0,3})',
+            r'([A-Z][a-z]+(?:\s+[A-Za-z][a-z]+){0,3})(?:\s+(?:here|speaking|is my name))',
+            r'([A-Z][a-z]+(?:\s+[A-Za-z][a-z]+){0,3})',
+            r'([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+){0,3})'
+        ]
+        
+        extracted = None
+        for pattern in name_patterns:
+            match = re.search(pattern, test)
+            if match:
+                extracted = match.group(1).strip()
+                if len(extracted.split()) >= 2 or len(extracted) > 3:
+                    break
+        
+        print(f"Input: '{test}' -> Extracted: '{extracted}'")
+    
+    # Test phone extraction with regex only
+    test_phones = [
+        "My phone number is 123-456-7890",
+        "Call me at (077) 598-2859",
+        "You can reach me at +44 7911 123456",
+        "07759828590",
+        "Phone: 555.123.4567"
+    ]
+    
+    print("\nTesting phone extraction:")
+    for test in test_phones:
+        # Try regex patterns only
+        phone_patterns = [
+            r'\b(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})\b',
+            r'\b(\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4})\b',
+            r'\b(\+\d{1,3})[-.\s]?(\d{1,4})[-.\s]?(\d{1,4})[-.\s]?(\d{1,9})\b',
+            r'\b(\d{2,3})[-.\s]?(\d{2,4})[-.\s]?(\d{2,4})[-.\s]?(\d{2,4})\b',
+            r'\b(\d{8,15})\b',
+            r'\b(\d{3,5})[-.\s]?(\d{3,5})[-.\s]?(\d{3,5})\b',
+            r'phone(?:[-.\s]?(?:number)?[-.\s]?(?:is)?)[-.\s:]*([+\d][-.,()\s\d]{7,25})',
+            r'number(?:[-.\s]?(?:is)?)[-.\s:]*([+\d][-.,()\s\d]{7,25})',
+            r'call(?:[-.\s]?(?:me)?)[-.\s:]*(?:at)?[-.\s:]*([+\d][-.,()\s\d]{7,25})'
+        ]
+        
+        extracted = None
+        for pattern in phone_patterns:
+            matches = re.findall(pattern, test)
+            if matches:
+                longest_match = max(matches, key=len)
+                if longest_match.startswith('+'):
+                    phone = '+' + re.sub(r'\D', '', longest_match[1:])
+                else:
+                    phone = re.sub(r'\D', '', longest_match)
+                
+                if 7 <= len(phone) <= 15 or (phone.startswith('+') and 8 <= len(phone) <= 16):
+                    extracted = phone
+                    break
+        
+        print(f"Input: '{test}' -> Extracted: '{extracted}'")
+    
+    # Test birthdate extraction with regex only
+    test_birthdates = [
+        "I was born on 1980-01-15",
+        "My birth date is January 15, 1980",
+        "DOB: 01/15/1980",
+        "15th of January, 1980",
+        "15-01-1980"
+    ]
+    
+    print("\nTesting birthdate extraction:")
+    for test in test_birthdates:
+        # Normalize the transcript
+        normalized = test.lower().replace('/', '-').replace('.', '-')
+        
+        # Try regex patterns only
+        date_patterns = [
+            r'\b(19\d{2}|20\d{2})[-/\.](0?[1-9]|1[0-2])[-/\.](0?[1-9]|[12][0-9]|3[01])\b',
+            r'\b(0?[1-9]|1[0-2])[-/\.](0?[1-9]|[12][0-9]|3[01])[-/\.](19\d{2}|20\d{2})\b',
+            r'\b(0?[1-9]|[12][0-9]|3[01])[-/\.](0?[1-9]|1[0-2])[-/\.](19\d{2}|20\d{2})\b',
+            r'\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(0?[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th)?,?\s+(19\d{2}|20\d{2})\b',
+            r'\b(0?[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th)?\s+(?:of\s+)?(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?,?\s+(19\d{2}|20\d{2})\b'
+        ]
+        
+        month_to_num = {
+            'january': '01', 'jan': '01',
+            'february': '02', 'feb': '02',
+            'march': '03', 'mar': '03',
+            'april': '04', 'apr': '04',
+            'may': '05',
+            'june': '06', 'jun': '06',
+            'july': '07', 'jul': '07',
+            'august': '08', 'aug': '08',
+            'september': '09', 'sep': '09', 'sept': '09',
+            'october': '10', 'oct': '10',
+            'november': '11', 'nov': '11',
+            'december': '12', 'dec': '12'
+        }
+        
+        extracted = None
+        for pattern in date_patterns:
+            match = re.search(pattern, normalized, re.IGNORECASE)
+            if match:
+                groups = match.groups()
+                
+                if len(groups) == 3:
+                    # Determine format type based on pattern
+                    if pattern.startswith(r'\b(19\d{2}|20\d{2})'):  # YYYY-MM-DD
+                        year, month, day = groups
+                    elif pattern.startswith(r'\b(0?[1-9]|1[0-2])'):  # MM-DD-YYYY
+                        month, day, year = groups
+                    elif pattern.startswith(r'\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)'):  # Month DD, YYYY
+                        month, day, year = groups
+                    elif pattern.startswith(r'\b(0?[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th)?\s+(?:of\s+)?'):  # DD Month YYYY
+                        day, month, year = groups
+                    else:  # DD-MM-YYYY
+                        day, month, year = groups
+                    
+                    # Convert to proper format
+                    if isinstance(month, str) and month.lower() in month_to_num:  # Month is a name
+                        month = month_to_num[month.lower()]
+                    
+                    # Ensure two digits for month and day
+                    month = str(month).zfill(2)
+                    day = str(day).zfill(2)
+                    
+                    extracted = f"{year}-{month}-{day}"
+                    break
+        
+        print(f"Input: '{test}' -> Extracted: '{extracted}'")
+
+if __name__ == "__main__":
+    test_extractions() 
