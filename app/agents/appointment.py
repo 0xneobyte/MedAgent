@@ -1165,7 +1165,7 @@ def get_doctor_available_slots(doctor_id, date_str):
     debug_log(f"Getting available slots for doctor {doctor_id} on date: {date_str}")
     
     try:
-        # Get the doctor from the database - ensure we convert string ID to ObjectID if needed
+        # Get the doctor from the database - ensure we convert string ID to ObjectId if needed
         if isinstance(doctor_id, str) and not doctor_id.startswith('ObjectId'):
             try:
                 doctor_id = ObjectId(doctor_id)
@@ -1184,37 +1184,15 @@ def get_doctor_available_slots(doctor_id, date_str):
         
         # Check if doctor has slots for this date
         available_slots = []
-        if "available_slots" in doctor and date_str in doctor["available_slots"]:
-            # Get raw slots directly from doctor's schedule for this date
-            raw_slots = doctor["available_slots"][date_str]
-            debug_log(f"Raw slots from doctor's schedule for {date_str}: {raw_slots}")
-        else:
-            # Date not explicitly in schedule - check if we can infer from patterns
-            debug_log(f"No slots explicitly found for date {date_str} in doctor's schedule")
-            
-            # Check if doctor has any available_slots to infer a pattern from
-            if "available_slots" in doctor and doctor["available_slots"]:
-                # Get the first available date as a pattern
-                first_date = list(doctor["available_slots"].keys())[0]
-                raw_slots = doctor["available_slots"][first_date]
-                debug_log(f"Using slots from {first_date} as a pattern: {raw_slots}")
-                
-                # Make sure we're not using slots for a weekend if the requested date is a weekday or vice versa
-                requested_date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-                pattern_date = datetime.datetime.strptime(first_date, "%Y-%m-%d")
-                
-                # If weekday/weekend status doesn't match, try to find another pattern
-                if (requested_date.weekday() >= 5) != (pattern_date.weekday() >= 5):
-                    # Try to find a date with matching weekday/weekend status
-                    for alt_date, alt_slots in doctor["available_slots"].items():
-                        alt_date_obj = datetime.datetime.strptime(alt_date, "%Y-%m-%d")
-                        if (alt_date_obj.weekday() >= 5) == (requested_date.weekday() >= 5):
-                            raw_slots = alt_slots
-                            debug_log(f"Found better matching pattern from {alt_date}: {raw_slots}")
-                            break
-            else:
-                debug_log(f"Doctor has no available_slots data to infer from")
-                raw_slots = []
+        
+        # BUGFIX: First check if the date exists in the doctor's available_slots
+        if 'available_slots' not in doctor or date_str not in doctor['available_slots']:
+            debug_log(f"Date {date_str} not found in doctor's available slots")
+            return []  # Return empty list if the date doesn't exist
+        
+        # Get the raw slots from the doctor's schedule
+        raw_slots = doctor['available_slots'].get(date_str, [])
+        debug_log(f"Raw slots from doctor's schedule for {date_str}: {raw_slots}")
         
         # Format slots for display
         for slot in raw_slots:
@@ -1643,6 +1621,12 @@ def appointment_agent(state):
                 
                 # Get the available slots for this date to show to the user
                 if doctor:
+                    # BUGFIX: Check if this date exists in the doctor's schedule first
+                    doctor_obj = doctors_collection.find_one({"_id": ObjectId(doctor_id)})
+                    if not doctor_obj or 'available_slots' not in doctor_obj or date_str not in doctor_obj['available_slots']:
+                        state["response"] = f"I'm sorry, but {doctor_name} is not available on {parser.parse(date_str).strftime('%A, %B %d, %Y')}. Please select a different date from their available schedule."
+                        return state
+                        
                     doctor_slots = get_doctor_available_slots(doctor_id, date_str)
                     
                     if doctor_slots:
@@ -2105,10 +2089,15 @@ def appointment_agent(state):
             # Special case: If we got a date but need time
             if not date_time_result.get("success") and date_time_result.get("need_time") and date_time_result.get("date"):
                 # Store the date for later use
-                context["new_appointment_date"] = date_time_result["date"]
+                date_str = date_time_result["date"]
+                
+                # BUGFIX: Check if this date exists in the doctor's schedule first
+                doctor_obj = doctors_collection.find_one({"_id": ObjectId(doctor_id)})
+                if not doctor_obj or 'available_slots' not in doctor_obj or date_str not in doctor_obj['available_slots']:
+                    state["response"] = f"I'm sorry, but {doctor_name} is not available on {parser.parse(date_str).strftime('%A, %B %d, %Y')}. Please select one of the dates I mentioned earlier."
+                    return state
                 
                 # Get the available slots for this date to show to the user
-                date_str = date_time_result["date"]
                 doctor_slots = get_doctor_available_slots(doctor_id, date_str)
                 
                 if doctor_slots:

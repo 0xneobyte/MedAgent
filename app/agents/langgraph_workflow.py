@@ -76,10 +76,9 @@ def route_by_intent(state):
     if intent in ["schedule_appointment", "book_appointment", "cancel_appointment", "reschedule_appointment"]:
         print(f"DEBUG WORKFLOW: Routing to appointment agent for {intent}")
         return "appointment"
-    elif intent == "general_inquiry":
-        return "call_center"
     else:
-        # Default to call center for unknown intents
+        # Route all other intents to call center (general_inquiry, health_question, other, unknown, etc.)
+        print(f"DEBUG WORKFLOW: Routing to call center for {intent}")
         return "call_center"
 
 # Set up the routing from receptionist
