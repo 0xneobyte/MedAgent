@@ -31,6 +31,7 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    command: mongod --bind_ip_all
     restart: unless-stopped
 
 volumes:
