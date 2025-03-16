@@ -13,4 +13,5 @@ flask-cors==4.0.0
 gunicorn==21.2.0
 requests==2.31.0
 pydantic==2.7.4
-typing-extensions==4.11.0 
+typing-extensions==4.11.0
+python-dateutil==2.8.2 
