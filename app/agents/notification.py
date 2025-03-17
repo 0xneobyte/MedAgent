@@ -305,6 +305,33 @@ def notification_agent(state):
         print(f"Notification agent received intent: {intent}")
         print(f"State keys: {list(state.keys())}")
         
+        # Check for existing notification before processing
+        if state.get("notification_sent", False):
+            print(f"Notification already sent for this operation, skipping")
+            return state
+        
+        # Check if we're in a completed state that should generate notification
+        in_completed_state = False
+        if "appointment_context" in state:
+            context = state["appointment_context"]
+            current_state = context.get("state", "")
+            if current_state in ["booking_confirmed", "cancellation_confirmed", "reschedule_confirmed"]:
+                in_completed_state = True
+                print(f"Found completed state: {current_state}")
+                
+                # Update intent based on the completed state if needed
+                if current_state == "booking_confirmed" and intent != "schedule_appointment":
+                    intent = "schedule_appointment"
+                    state["intent"] = intent
+                elif current_state == "cancellation_confirmed" and intent != "cancel_appointment":
+                    intent = "cancel_appointment"  
+                    state["intent"] = intent
+                elif current_state == "reschedule_confirmed" and intent != "reschedule_appointment":
+                    intent = "reschedule_appointment"
+                    state["intent"] = intent
+                    
+                print(f"Updated intent to match operation: {intent}")
+            
         # Check if we have cancellation details either directly or in the appointment context
         cancellation_details = None
         has_cancellation_details = False
@@ -343,23 +370,8 @@ def notification_agent(state):
             # Also add to root state for consistency
             state["reschedule_details"] = reschedule_details
         
-        # Log whether we found cancellation details
-        if has_cancellation_details:
-            print(f"Cancellation details: {cancellation_details}")
-            # Force intent to cancel_appointment if we have cancellation details 
-            if intent != "cancel_appointment":
-                print(f"Overriding intent from {intent} to cancel_appointment due to cancellation_details")
-                intent = "cancel_appointment"
-                state["intent"] = "cancel_appointment"
-        
-        # Log whether we found rescheduling details
-        if has_reschedule_details:
-            print(f"Rescheduling details: {reschedule_details}")
-            # Force intent to reschedule_appointment if we have rescheduling details
-            if intent != "reschedule_appointment":
-                print(f"Overriding intent from {intent} to reschedule_appointment due to reschedule_details")
-                intent = "reschedule_appointment"
-                state["intent"] = "reschedule_appointment"
+        # Track if we sent a notification during this run
+        notification_sent = False
         
         # Check if this is a new appointment intent
         if intent in ["schedule_appointment", "book_appointment"] and "appointment_details" in state:
@@ -378,10 +390,13 @@ def notification_agent(state):
                     html_content=email_content
                 )
                 
-                state["notification_sent"] = True
+                notification_sent = True
+                
+                # Mark in appointment context to prevent duplicate sending
+                if "appointment_context" in state:
+                    state["appointment_context"]["booking_notification_sent"] = True
             else:
                 print(f"No email address found for appointment confirmation")
-                state["notification_sent"] = False
                 
         # Handle cancellation email
         elif intent == "cancel_appointment" and has_cancellation_details:
@@ -399,10 +414,13 @@ def notification_agent(state):
                     html_content=email_content
                 )
                 
-                state["notification_sent"] = True
+                notification_sent = True
+                
+                # Mark in appointment context to prevent duplicate sending
+                if "appointment_context" in state:
+                    state["appointment_context"]["cancellation_notification_sent"] = True
             else:
                 print(f"No email address found for cancellation confirmation")
-                state["notification_sent"] = False
                 
         # Handle rescheduling email
         elif intent == "reschedule_appointment" and has_reschedule_details:
@@ -420,14 +438,19 @@ def notification_agent(state):
                     html_content=email_content
                 )
                 
-                state["notification_sent"] = True
+                notification_sent = True
+                
+                # Mark in appointment context to prevent duplicate sending
+                if "appointment_context" in state:
+                    state["appointment_context"]["reschedule_notification_sent"] = True
             else:
                 print(f"No email address found for rescheduling confirmation")
-                state["notification_sent"] = False
         else:
             # No notification needed or not enough info
             print(f"No notification sent - no matching intent or details")
-            state["notification_sent"] = False
+        
+        # Update the state to reflect if notification was sent
+        state["notification_sent"] = notification_sent
         
         print(f"======= NOTIFICATION AGENT END =======")
         trace.update(status="success")
