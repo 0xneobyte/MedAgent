@@ -5,307 +5,682 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MedAgent - AI Healthcare Assistant</title>
     <style>
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+      * {
         margin: 0;
         padding: 0;
-        background-color: #f5f7fa;
-        color: #333;
+        box-sizing: border-box;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
       }
 
-      .container {
-        max-width: 800px;
-        margin: 0 auto;
-        padding: 20px;
-      }
-
-      .header {
-        background-color: #3b5998;
-        color: white;
-        padding: 30px 0;
-        text-align: center;
-        border-radius: 8px 8px 0 0;
-        margin-bottom: 0;
-      }
-
-      .header h1 {
-        margin: 0;
-        font-size: 32px;
-      }
-
-      .header p {
-        margin: 10px 0 0;
-        font-size: 18px;
-      }
-
-      .chat-interface {
-        background-color: white;
-        border-radius: 0 0 8px 8px;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        padding: 20px;
-        min-height: 500px;
+      body {
+        background: linear-gradient(135deg, #0000cc, #6600cc, #cc0066);
+        background-size: 400% 400%;
+        min-height: 100vh;
         display: flex;
         flex-direction: column;
+        align-items: center;
+        color: white;
+        overflow-x: hidden;
+        position: relative;
+        transition: background 0.5s ease;
       }
 
-      .status-box {
-        background-color: #f8f9fa;
-        border-left: 3px solid #3b5998;
-        padding: 12px;
-        margin-bottom: 20px;
+      body.speaking {
+        animation: gradientMovement 8s ease infinite;
+      }
+
+      @keyframes gradientMovement {
+        0% {
+          background-position: 0% 50%;
+        }
+        50% {
+          background-position: 100% 50%;
+        }
+        100% {
+          background-position: 0% 50%;
+        }
+      }
+
+      .call-container {
+        max-width: 500px;
+        width: 100%;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+        margin: 0 auto;
+      }
+
+      .chat-container {
+        position: fixed;
+        top: 50%;
+        right: -400px;
+        transform: translateY(-50%);
+        width: 380px;
+        height: 80vh;
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        border-left: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 20px 0 0 20px;
+        display: flex;
+        flex-direction: column;
+        box-shadow: -5px 0 25px rgba(0, 0, 0, 0.2);
+        transition: right 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        z-index: 1000;
+      }
+
+      .chat-container.active {
+        right: 0;
+      }
+
+      .chat-header {
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.15);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        text-align: center;
+        border-radius: 20px 0 0 0;
+        position: relative;
+      }
+
+      .close-chat {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        background: none;
+        border: none;
+        color: white;
+        font-size: 20px;
+        cursor: pointer;
+        opacity: 0.7;
+        transition: opacity 0.2s;
+      }
+
+      .close-chat:hover {
+        opacity: 1;
+      }
+
+      .chat-header h1 {
+        font-size: 24px;
+        font-weight: 600;
+        margin-bottom: 5px;
+      }
+
+      .chat-header p {
+        font-size: 14px;
+        opacity: 0.8;
+      }
+
+      .intent-detected {
+        margin: 15px 20px;
+        padding: 10px 15px;
+        background: rgba(255, 255, 255, 0.1);
+        border-left: 3px solid #a277ff;
+        border-radius: 0 4px 4px 0;
         font-size: 14px;
       }
 
       .chat-messages {
-        flex-grow: 1;
+        flex: 1;
+        padding: 20px;
         overflow-y: auto;
-        padding: 10px;
-        margin-bottom: 20px;
         display: flex;
         flex-direction: column;
-        min-height: 400px;
+        gap: 15px;
       }
 
       .message {
-        margin-bottom: 15px;
-        padding: 12px 16px;
-        border-radius: 18px;
         max-width: 80%;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-        position: relative;
-        line-height: 1.5;
+        padding: 15px;
+        border-radius: 18px;
+        line-height: 1.4;
+        animation: fadeIn 0.3s ease;
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .bot-message {
+        background: rgba(255, 255, 255, 0.15);
+        border-top-left-radius: 4px;
+        align-self: flex-start;
       }
 
       .user-message {
-        background-color: #e7f3ff;
-        color: #000;
+        background: rgba(255, 255, 255, 0.25);
+        border-top-right-radius: 4px;
         align-self: flex-end;
-        border-bottom-right-radius: 4px;
       }
 
-      .assistant-message {
-        background-color: #f0f2f5;
-        color: #000;
-        align-self: flex-start;
-        border-bottom-left-radius: 4px;
-      }
-
-      .controls {
+      .chat-input {
+        padding: 15px;
         display: flex;
-        justify-content: center;
+        gap: 10px;
         align-items: center;
-        margin-top: 20px;
-        position: relative;
-        width: 100%;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
       }
 
-      .input-group {
-        display: flex;
-        margin-right: 15px;
-        width: 100%;
-        max-width: 600px;
-      }
-
-      .text-input {
-        flex-grow: 1;
-        padding: 10px 15px;
-        border: 1px solid #ddd;
-        border-radius: 20px 0 0 20px;
+      .chat-input input {
+        flex: 1;
+        padding: 12px 20px;
+        border-radius: 30px;
+        border: none;
+        background: rgba(255, 255, 255, 0.2);
+        color: white;
         font-size: 16px;
         outline: none;
-      }
-
-      .send-button {
-        background-color: #3b5998;
-        color: white;
-        border: none;
-        border-radius: 0 20px 20px 0;
-        width: 50px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
         transition: all 0.3s ease;
       }
 
-      .send-button:hover {
-        background-color: #2d4373;
+      .chat-input input::placeholder {
+        color: rgba(255, 255, 255, 0.6);
       }
 
-      .mic-button {
-        background-color: #3b5998;
-        color: white;
-        border: none;
+      .chat-input input:focus {
+        background: rgba(255, 255, 255, 0.3);
+      }
+
+      .chat-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .chat-action-button {
+        width: 40px;
+        height: 40px;
         border-radius: 50%;
-        width: 64px;
-        height: 64px;
-        font-size: 24px;
-        cursor: pointer;
+        background: rgba(255, 255, 255, 0.2);
         display: flex;
         align-items: center;
         justify-content: center;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        border: none;
+        color: white;
+        font-size: 16px;
       }
 
-      .mic-button:hover {
-        background-color: #2d4373;
+      .chat-action-button:hover {
+        background: rgba(255, 255, 255, 0.3);
         transform: scale(1.05);
       }
 
-      .mic-button.recording {
+      .chat-action-button:active {
+        transform: scale(0.95);
+      }
+
+      .send-button {
+        background: #a277ff;
+      }
+
+      /* Original Arc Call Interface Styles */
+      .status-bar {
+        display: flex;
+        justify-content: space-between;
+        padding: 20px;
+        font-size: 18px;
+      }
+
+      .time-moon {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .icons {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .battery {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        background-color: rgba(255, 255, 255, 0.3);
+        border-radius: 10px;
+        padding: 2px 8px;
+      }
+
+      .call-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        margin-top: -80px;
+      }
+
+      .timer {
+        font-size: 32px;
+        font-weight: 300;
+      }
+
+      .app-name {
+        font-size: 80px;
+        font-weight: 300;
+        margin-bottom: 20px;
+      }
+
+      .face {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        margin: 20px 0;
+        position: relative;
+      }
+
+      .eyes {
+        display: flex;
+        gap: 40px;
+      }
+
+      .eye {
+        width: 12px;
+        height: 80px;
+        background-color: white;
+        border-radius: 20px;
+      }
+
+      .smile {
+        width: 160px;
+        height: 40px;
+        border-radius: 0 0 80px 80px;
+        border: 12px solid white;
+        border-top: none;
+      }
+
+      .face.speaking .smile {
+        animation: smilePulse 1.5s ease-in-out infinite;
+      }
+
+      @keyframes smilePulse {
+        0%,
+        100% {
+          transform: scaleX(1);
+        }
+        50% {
+          transform: scaleX(1.1);
+        }
+      }
+
+      .message-bubble {
+        position: relative;
+        margin-top: 100px;
+      }
+
+      .bubble {
+        background-color: white;
+        color: #3a0ca3;
+        padding: 12px 30px;
+        border-radius: 30px;
+        font-size: 20px;
+        font-weight: 500;
+        position: relative;
+      }
+
+      .bubble-dot {
+        width: 12px;
+        height: 12px;
+        background-color: white;
+        border-radius: 50%;
+        position: absolute;
+        top: -20px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+
+      .bubble-dot-small {
+        width: 8px;
+        height: 8px;
+        background-color: white;
+        border-radius: 50%;
+        position: absolute;
+        top: -35px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+
+      .pagination {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+        margin-top: auto;
+        margin-bottom: 30px;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        background-color: rgba(255, 255, 255, 0.5);
+        border-radius: 50%;
+      }
+
+      .dot.active {
+        background-color: white;
+      }
+
+      .call-actions {
+        display: flex;
+        justify-content: space-around;
+        margin-bottom: 60px;
+        width: 100%;
+      }
+
+      .action-button {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .button-circle {
+        width: 65px;
+        height: 65px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: transform 0.2s ease;
+      }
+
+      .button-circle:hover {
+        transform: scale(1.05);
+      }
+
+      .button-circle:active {
+        transform: scale(0.95);
+      }
+
+      .speaker-button {
+        background-color: #0a0a2e;
+      }
+
+      .speaker-button.active {
+        background-color: #4caf50;
+      }
+
+      .talk-button {
+        background-color: #4a2a82;
+      }
+
+      .talk-button.recording {
         background-color: #cc0000;
         animation: pulse 1.5s infinite;
       }
 
-      .listening-indicator {
+      /* Sound wave animation for the talk button when speaking */
+      .talk-button.speaking {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .talk-button.speaking::before {
+        content: "";
         position: absolute;
-        top: -25px;
+        top: 50%;
+        left: 50%;
+        width: 150%;
+        height: 150%;
+        background: radial-gradient(
+          circle,
+          rgba(255, 255, 255, 0.2) 0%,
+          rgba(255, 255, 255, 0) 70%
+        );
+        transform: translate(-50%, -50%);
+        animation: soundWave 2s ease-out infinite;
+      }
+
+      @keyframes soundWave {
+        0% {
+          width: 0%;
+          height: 0%;
+          opacity: 1;
+        }
+        100% {
+          width: 200%;
+          height: 200%;
+          opacity: 0;
+        }
+      }
+
+      /* Visual indicator for speaking state */
+      .speaking-indicator {
+        position: absolute;
+        top: 20px;
         left: 50%;
         transform: translateX(-50%);
-        color: #cc0000;
-        font-weight: bold;
-        display: none;
-      }
-
-      .tts-button {
-        background-color: #3b5998;
-        color: white;
-        border: none;
-        border-radius: 50%;
-        width: 48px;
-        height: 48px;
-        font-size: 18px;
-        cursor: pointer;
+        background-color: rgba(255, 255, 255, 0.2);
+        padding: 8px 15px;
+        border-radius: 20px;
+        font-size: 14px;
+        opacity: 0;
+        transition: opacity 0.3s ease;
         display: flex;
         align-items: center;
-        justify-content: center;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-        margin-left: 10px;
+        gap: 8px;
+        z-index: 10;
       }
 
-      .tts-button:hover {
-        background-color: #2d4373;
-        transform: scale(1.05);
+      .speaking-indicator.active {
+        opacity: 1;
       }
 
-      .tts-button.active {
-        background-color: #4caf50;
+      .sound-wave {
+        display: flex;
+        align-items: center;
+        height: 15px;
+        gap: 3px;
       }
 
-      .tts-button.loading {
+      .sound-bar {
+        width: 3px;
+        height: 100%;
+        background-color: white;
+        border-radius: 3px;
+        animation: soundBar 1s ease infinite;
+      }
+
+      .sound-bar:nth-child(1) {
+        animation-delay: 0.1s;
+      }
+      .sound-bar:nth-child(2) {
+        animation-delay: 0.3s;
+      }
+      .sound-bar:nth-child(3) {
+        animation-delay: 0.5s;
+      }
+      .sound-bar:nth-child(4) {
+        animation-delay: 0.2s;
+      }
+
+      @keyframes soundBar {
+        0%,
+        100% {
+          height: 30%;
+        }
+        50% {
+          height: 100%;
+        }
+      }
+
+      .chat-button {
+        background-color: #6a3093;
+      }
+
+      .end-button {
+        background-color: #ff3b30;
+      }
+
+      .button-label {
+        font-size: 14px;
+      }
+
+      .home-indicator {
+        width: 150px;
+        height: 5px;
+        background-color: white;
+        border-radius: 3px;
+        margin: 0 auto 10px;
+      }
+
+      /* Add loading animation for voice message */
+      .bubble.loading:after {
+        content: "...";
+        display: inline-block;
+        animation: ellipsis-animation 1.5s infinite;
+        margin-left: 4px;
+      }
+
+      @keyframes ellipsis-animation {
+        0% {
+          content: ".";
+        }
+        33% {
+          content: "..";
+        }
+        66% {
+          content: "...";
+        }
+        100% {
+          content: ".";
+        }
+      }
+
+      /* Add loading animation for speaker button */
+      .button-circle.loading {
         position: relative;
         pointer-events: none;
       }
 
-      .tts-button.loading::after {
+      .button-circle.loading:after {
         content: "";
         position: absolute;
-        width: 16px;
-        height: 16px;
+        width: 20px;
+        height: 20px;
         top: 50%;
         left: 50%;
-        margin-top: -8px;
-        margin-left: -8px;
+        margin-top: -10px;
+        margin-left: -10px;
         border-radius: 50%;
         border: 2px solid rgba(255, 255, 255, 0.3);
         border-top-color: white;
-        animation: tts-loading-spinner 0.8s linear infinite;
+        animation: spinner-animation 0.8s linear infinite;
       }
 
-      @keyframes tts-loading-spinner {
+      @keyframes spinner-animation {
         to {
           transform: rotate(360deg);
-        }
-      }
-
-      @keyframes pulse {
-        0% {
-          transform: scale(1);
-          box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-        }
-        50% {
-          transform: scale(1.1);
-          box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-        }
-        100% {
-          transform: scale(1);
-          box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-        }
-      }
-
-      @media (max-width: 768px) {
-        .container {
-          padding: 10px;
-        }
-
-        .message {
-          max-width: 85%;
         }
       }
     </style>
   </head>
   <body>
-    <div class="container">
-      <div class="header">
-        <h1>MedAgent</h1>
-        <p>AI Healthcare Assistant</p>
+    <!-- Speaking Indicator -->
+    <div class="speaking-indicator" id="speaking-indicator">
+      <span>MedAgent is speaking</span>
+      <div class="sound-wave">
+        <div class="sound-bar"></div>
+        <div class="sound-bar"></div>
+        <div class="sound-bar"></div>
+        <div class="sound-bar"></div>
+      </div>
+    </div>
+
+    <!-- Main Call Interface -->
+    <div class="call-container">
+      <div class="status-bar">
+        <div class="time-moon">
+          <span id="current-time">11:49</span>
+          <span>🌙</span>
+        </div>
+        <div class="icons">
+          <span>📶</span>
+          <span>📡</span>
+          <div class="battery">
+            <span>39</span>
+          </div>
+        </div>
       </div>
 
-      <div class="chat-interface">
-        <div class="status-box" id="status-box">
-          Intent detected: receptionist
+      <div class="call-content">
+        <div class="timer" id="voice-timer">0:01</div>
+        <div class="app-name">MedAgent</div>
+
+        <div class="face">
+          <div class="eyes">
+            <div class="eye"></div>
+            <div class="eye"></div>
+          </div>
+          <div class="smile"></div>
         </div>
 
-        <div class="chat-messages" id="chat-messages">
-          <div class="message assistant-message">
-            Hello! I'm your healthcare AI assistant. How can I help you today?
-            Click the microphone button and speak when you're ready.
+        <div class="message-bubble">
+          <div class="bubble-dot-small"></div>
+          <div class="bubble-dot"></div>
+          <div class="bubble" id="voice-message">
+            Hello! How can I help with your healthcare needs?
           </div>
         </div>
+      </div>
 
-        <div class="controls">
-          <div class="listening-indicator" id="listening-indicator">
-            Listening...
-          </div>
-          <div class="input-group">
-            <input
-              type="text"
-              id="text-input"
-              class="text-input"
-              placeholder="Type your message here..."
-            />
-            <button class="send-button" id="send-button">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-              </svg>
-            </button>
-          </div>
-          <button
-            class="mic-button"
-            id="mic-button"
-            title="Tap to start/stop recording"
-          >
+      <div class="pagination">
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot active"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+      </div>
+
+      <div class="call-actions">
+        <div class="action-button">
+          <div class="button-circle speaker-button" id="speaker-button">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="24"
               height="24"
               viewBox="0 0 24 24"
               fill="none"
-              stroke="currentColor"
+              stroke="white"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+            </svg>
+          </div>
+          <div class="button-label">Speaker</div>
+        </div>
+
+        <div class="action-button">
+          <div class="button-circle talk-button" id="talk-button">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
@@ -317,16 +692,93 @@
               <line x1="12" y1="19" x2="12" y2="23"></line>
               <line x1="8" y1="23" x2="16" y2="23"></line>
             </svg>
-          </button>
-          <button
-            class="tts-button"
-            id="tts-button"
-            title="Toggle text-to-speech"
-          >
+          </div>
+          <div class="button-label">Tap to Talk</div>
+        </div>
+
+        <div class="action-button">
+          <div class="button-circle chat-button" id="toggle-chat">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="24"
               height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+              ></path>
+            </svg>
+          </div>
+          <div class="button-label">Chat</div>
+        </div>
+
+        <div class="action-button">
+          <div class="button-circle end-button" id="end-button">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M16 3h5v5"></path>
+              <path d="M4 20l16-16"></path>
+              <path d="M21 16v5h-5"></path>
+              <path d="M15 15l6 6"></path>
+              <path d="M4 4l6 6"></path>
+            </svg>
+          </div>
+          <div class="button-label">End</div>
+        </div>
+      </div>
+
+      <div class="home-indicator"></div>
+    </div>
+
+    <!-- Chat Popup -->
+    <div class="chat-container" id="chat-popup">
+      <div class="chat-header">
+        <button class="close-chat" id="close-chat">✕</button>
+        <h1>MedAgent</h1>
+        <p>AI Healthcare Assistant</p>
+      </div>
+
+      <div class="intent-detected" id="intent-detected">
+        Intent detected: greeting
+      </div>
+
+      <div class="chat-messages" id="chat-messages">
+        <div class="message bot-message">
+          Hello! I'm your MedAgent assistant. How can I help you with your
+          healthcare needs today?
+        </div>
+      </div>
+
+      <div class="chat-input">
+        <input
+          type="text"
+          id="chat-input"
+          placeholder="Type your message here..."
+        />
+        <div class="chat-actions">
+          <button class="chat-action-button" id="chat-mic-button">🎤</button>
+          <button class="chat-action-button" id="chat-speaker-button">
+            🔊
+          </button>
+          <button class="chat-action-button send-button" id="chat-send-button">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -334,9 +786,8 @@
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
             </svg>
           </button>
         </div>
@@ -349,25 +800,226 @@
       console.log("Using conversation ID:", conversationId);
 
       document.addEventListener("DOMContentLoaded", function () {
-        // Get DOM elements
-        const micButton = document.getElementById("mic-button");
-        const ttsButton = document.getElementById("tts-button");
-        const statusBox = document.getElementById("status-box");
-        const chatMessages = document.getElementById("chat-messages");
-        const listeningIndicator = document.getElementById(
-          "listening-indicator"
-        );
+        // Update current time
+        function updateCurrentTime() {
+          const now = new Date();
+          const hours = now.getHours();
+          const minutes = now.getMinutes().toString().padStart(2, "0");
+          document.getElementById(
+            "current-time"
+          ).textContent = `${hours}:${minutes}`;
+        }
 
-        // Track the currently playing audio element
+        updateCurrentTime();
+        setInterval(updateCurrentTime, 60000);
+
+        // Get DOM elements
+        // Voice interface elements
+        const voiceTimer = document.getElementById("voice-timer");
+        const voiceMessage = document.getElementById("voice-message");
+        const speakerButton = document.getElementById("speaker-button");
+        const talkButton = document.getElementById("talk-button");
+        const endButton = document.getElementById("end-button");
+
+        // Chat elements
+        const chatPopup = document.getElementById("chat-popup");
+        const toggleChatBtn = document.getElementById("toggle-chat");
+        const closeChatBtn = document.getElementById("close-chat");
+        const chatMessages = document.getElementById("chat-messages");
+        const chatInput = document.getElementById("chat-input");
+        const chatSendButton = document.getElementById("chat-send-button");
+        const chatMicButton = document.getElementById("chat-mic-button");
+        const chatSpeakerButton = document.getElementById(
+          "chat-speaker-button"
+        );
+        const intentDetected = document.getElementById("intent-detected");
+
+        // State variables
+        let recordingInProgress = false;
+        let timerInterval;
+        let recordingStartTime;
+        let chatPanelActive = false;
         let currentAudio = null;
 
         // Check if TTS is stored in localStorage and apply setting
         const ttsEnabled = localStorage.getItem("tts-enabled") === "true";
         if (ttsEnabled) {
-          ttsButton.classList.add("active");
+          speakerButton.classList.add("active");
         }
 
-        // Function to speak text using ElevenLabs API
+        // Toggle chat panel
+        function toggleChatPanel(show) {
+          if (show) {
+            chatPopup.classList.add("active");
+            chatPanelActive = true;
+          } else {
+            chatPopup.classList.remove("active");
+            chatPanelActive = false;
+          }
+        }
+
+        // Function to update timer display
+        function updateTimerDisplay() {
+          const elapsedSeconds = Math.floor(
+            (Date.now() - recordingStartTime) / 1000
+          );
+          const minutes = Math.floor(elapsedSeconds / 60);
+          const seconds = elapsedSeconds % 60;
+          voiceTimer.textContent = `${minutes}:${seconds
+            .toString()
+            .padStart(2, "0")}`;
+        }
+
+        // Function to start voice recording
+        function startVoiceRecording() {
+          if (recordingInProgress) return;
+
+          recordingInProgress = true;
+          recordingStartTime = Date.now();
+
+          // Update UI
+          talkButton.classList.add("recording");
+
+          // Start timer
+          updateTimerDisplay();
+          timerInterval = setInterval(updateTimerDisplay, 1000);
+
+          // Show recording message
+          voiceMessage.textContent = "Listening...";
+
+          // Start actual recording
+          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices
+              .getUserMedia({ audio: true })
+              .then(function (stream) {
+                let mediaRecorder;
+                let audioChunks = [];
+
+                try {
+                  mediaRecorder = new MediaRecorder(stream);
+                } catch (e) {
+                  console.error("MediaRecorder error:", e);
+                  stopVoiceRecording();
+                  return;
+                }
+
+                // Store the active recorder in a global variable for access when stopping
+                window.activeMediaRecorder = mediaRecorder;
+                window.activeStream = stream;
+
+                // Handle data available event
+                mediaRecorder.addEventListener("dataavailable", (event) => {
+                  if (event.data.size > 0) {
+                    audioChunks.push(event.data);
+                  }
+                });
+
+                // Handle recording stop event
+                mediaRecorder.addEventListener("stop", () => {
+                  // Create audio blob
+                  const audioBlob = new Blob(audioChunks, {
+                    type: "audio/mp3",
+                  });
+
+                  // Only process audio if it's long enough (to avoid accidental taps)
+                  if (audioChunks.length > 0) {
+                    // Update UI
+                    voiceMessage.textContent = "Processing...";
+
+                    const formData = new FormData();
+                    formData.append("audio", audioBlob, "recording.mp3");
+
+                    // Send to server with conversation ID in the URL
+                    fetch(`/api/transcribe/${conversationId}`, {
+                      method: "POST",
+                      body: formData,
+                    })
+                      .then((response) => {
+                        if (!response.ok) {
+                          throw new Error("Network response was not ok");
+                        }
+                        return response.json();
+                      })
+                      .then((data) => {
+                        // Use the new handler function
+                        handleApiResponse(data, true);
+                      })
+                      .catch((error) => {
+                        console.error("Error:", error);
+                        voiceMessage.textContent =
+                          "Error processing your request";
+                      });
+                  } else {
+                    voiceMessage.textContent =
+                      "Hello! How can I help with your healthcare needs?";
+                  }
+
+                  // Release microphone
+                  if (window.activeStream) {
+                    window.activeStream
+                      .getTracks()
+                      .forEach((track) => track.stop());
+                    window.activeStream = null;
+                  }
+                });
+
+                // Start recording
+                mediaRecorder.start();
+              })
+              .catch((error) => {
+                console.error("Error accessing microphone:", error);
+                stopVoiceRecording();
+                voiceMessage.textContent = "Could not access microphone";
+              });
+          } else {
+            stopVoiceRecording();
+            voiceMessage.textContent = "Your browser doesn't support recording";
+          }
+        }
+
+        // Function to stop voice recording
+        function stopVoiceRecording() {
+          if (!recordingInProgress) return;
+
+          recordingInProgress = false;
+
+          // Clear timer
+          if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+          }
+
+          // Update UI
+          talkButton.classList.remove("recording");
+
+          // Stop recording if active
+          if (
+            window.activeMediaRecorder &&
+            window.activeMediaRecorder.state === "recording"
+          ) {
+            window.activeMediaRecorder.stop();
+            window.activeMediaRecorder = null;
+          }
+        }
+
+        // Function to handle speaking animations
+        function startSpeakingAnimation() {
+          document.body.classList.add("speaking");
+          document.querySelector(".face").classList.add("speaking");
+          document.getElementById("talk-button").classList.add("speaking");
+          document.getElementById("speaking-indicator").classList.add("active");
+        }
+
+        function stopSpeakingAnimation() {
+          document.body.classList.remove("speaking");
+          document.querySelector(".face").classList.remove("speaking");
+          document.getElementById("talk-button").classList.remove("speaking");
+          document
+            .getElementById("speaking-indicator")
+            .classList.remove("active");
+        }
+
+        // Modify the speak function to include animation
         function speak(text) {
           // Only speak if TTS is enabled
           if (localStorage.getItem("tts-enabled") !== "true") return;
@@ -376,10 +1028,15 @@
           if (currentAudio) {
             currentAudio.pause();
             currentAudio = null;
+            stopSpeakingAnimation();
           }
 
-          // Show loading indicator on the TTS button
-          ttsButton.classList.add("loading");
+          // Show loading state
+          speakerButton.classList.add("loading");
+          const bubbleElement = document.getElementById("voice-message");
+          const originalText = bubbleElement.textContent;
+          bubbleElement.textContent = "Generating audio";
+          bubbleElement.classList.add("loading");
 
           // Call our backend endpoint that interfaces with ElevenLabs
           fetch("/api/tts", {
@@ -406,196 +1063,109 @@
               // Store reference to current audio
               currentAudio = audio;
 
+              // Reset loading state and show the actual message
+              speakerButton.classList.remove("loading");
+              bubbleElement.textContent = text;
+              bubbleElement.classList.remove("loading");
+
+              // Start speaking animations
+              startSpeakingAnimation();
+
               // Set up event listeners
               audio.addEventListener("ended", () => {
                 // Clean up when audio finishes
                 URL.revokeObjectURL(audioUrl);
                 currentAudio = null;
+
+                // Stop speaking animations
+                stopSpeakingAnimation();
               });
 
               audio.addEventListener("error", (e) => {
                 console.error("Audio playback error:", e);
                 URL.revokeObjectURL(audioUrl);
                 currentAudio = null;
+                stopSpeakingAnimation();
               });
 
               // Play the audio
               audio.play().catch((e) => {
                 console.error("Error playing audio:", e);
+                stopSpeakingAnimation();
               });
-
-              // Remove loading indicator
-              ttsButton.classList.remove("loading");
             })
             .catch((error) => {
               console.error("Error with TTS:", error);
-              ttsButton.classList.remove("loading");
+
+              // Reset loading state
+              speakerButton.classList.remove("loading");
+              bubbleElement.textContent = originalText;
+              bubbleElement.classList.remove("loading");
 
               // Fallback to browser TTS if ElevenLabs fails
               const utterance = new SpeechSynthesisUtterance(text);
+
+              // Start animations
+              startSpeakingAnimation();
+
+              utterance.onend = () => {
+                stopSpeakingAnimation();
+              };
+
               window.speechSynthesis.speak(utterance);
             });
         }
 
+        // Function to handle API response
+        function handleApiResponse(data, userMessage) {
+          // Display transcript in voice mode if available
+          if (data.transcript && userMessage) {
+            voiceMessage.textContent = data.transcript;
+
+            // Also add to chat panel messages
+            addChatMessage(data.transcript, true);
+
+            // Update intent if available
+            if (data.intent) {
+              intentDetected.textContent = `Intent detected: ${data.intent}`;
+            }
+          }
+
+          // Handle response if available
+          if (data.response) {
+            // Don't show the response text yet, speak will update it when audio is ready
+
+            // Add message to chat panel
+            addChatMessage(data.response, false);
+
+            // Speak the response, which will update the bubble text when audio is ready
+            speak(data.response);
+
+            // We don't reset to default greeting anymore
+          }
+        }
+
         // Function to add a message to the chat
-        function addMessage(text, isUser) {
+        function addChatMessage(text, isUser) {
           const messageDiv = document.createElement("div");
           messageDiv.className = isUser
             ? "message user-message"
-            : "message assistant-message";
+            : "message bot-message";
           messageDiv.textContent = text;
           chatMessages.appendChild(messageDiv);
           chatMessages.scrollTop = chatMessages.scrollHeight;
-
-          // If it's an assistant message, speak it
-          if (!isUser) {
-            speak(text);
-          }
         }
 
-        // Add click event to TTS button
-        ttsButton.addEventListener("click", function () {
-          const isEnabled = ttsButton.classList.toggle("active");
-          localStorage.setItem("tts-enabled", isEnabled);
+        // Function to send a chat message
+        function sendChatMessage() {
+          const text = chatInput.value.trim();
 
-          // Announce status change
-          if (isEnabled) {
-            speak(
-              "Text-to-speech is now enabled using ElevenLabs AI voice technology."
-            );
-          } else {
-            // Stop any currently playing audio
-            if (currentAudio) {
-              currentAudio.pause();
-              currentAudio = null;
-            }
-          }
-        });
-
-        // Function to start recording audio
-        function startRecording() {
-          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            // If we're already recording, stop the recording
-            if (micButton.classList.contains("recording")) {
-              // Find and stop the active recorder
-              if (
-                window.activeMediaRecorder &&
-                window.activeMediaRecorder.state === "recording"
-              ) {
-                window.activeMediaRecorder.stop();
-              }
-              return;
-            }
-
-            // Update UI
-            micButton.classList.add("recording");
-            listeningIndicator.style.display = "block";
-            statusBox.textContent = "Listening...";
-
-            // Request microphone access
-            navigator.mediaDevices
-              .getUserMedia({ audio: true })
-              .then(function (stream) {
-                let mediaRecorder;
-                let audioChunks = [];
-
-                try {
-                  mediaRecorder = new MediaRecorder(stream);
-                } catch (e) {
-                  console.error("MediaRecorder error:", e);
-                  return;
-                }
-
-                // Store the active recorder in a global variable for access when stopping
-                window.activeMediaRecorder = mediaRecorder;
-
-                // Handle data available event
-                mediaRecorder.addEventListener("dataavailable", (event) => {
-                  if (event.data.size > 0) {
-                    audioChunks.push(event.data);
-                  }
-                });
-
-                // Handle recording stop event
-                mediaRecorder.addEventListener("stop", () => {
-                  // Update UI
-                  micButton.classList.remove("recording");
-                  listeningIndicator.style.display = "none";
-                  statusBox.textContent = "Processing your request...";
-
-                  // Create audio blob
-                  const audioBlob = new Blob(audioChunks, {
-                    type: "audio/mp3",
-                  });
-                  const formData = new FormData();
-                  formData.append("audio", audioBlob, "recording.mp3");
-
-                  // Send to server with conversation ID in the URL
-                  fetch(`/api/transcribe/${conversationId}`, {
-                    method: "POST",
-                    body: formData,
-                  })
-                    .then((response) => {
-                      if (!response.ok) {
-                        throw new Error("Network response was not ok");
-                      }
-                      return response.json();
-                    })
-                    .then((data) => {
-                      // Display transcript
-                      if (data.transcript) {
-                        addMessage(data.transcript, true);
-
-                        // Display response
-                        if (data.response) {
-                          addMessage(data.response, false);
-                          statusBox.textContent = `Intent detected: ${data.intent}`;
-                        }
-                      }
-                    })
-                    .catch((error) => {
-                      console.error("Error:", error);
-                      statusBox.textContent =
-                        "Error processing your request. Please try again.";
-                    });
-
-                  // Release microphone
-                  stream.getTracks().forEach((track) => track.stop());
-                });
-
-                // Start recording
-                mediaRecorder.start();
-              })
-              .catch((error) => {
-                console.error("Error accessing microphone:", error);
-                micButton.classList.remove("recording");
-                listeningIndicator.style.display = "none";
-                statusBox.textContent =
-                  "Could not access microphone. Please check permissions.";
-              });
-          } else {
-            alert(
-              "Your browser doesn't support audio recording. Please use a modern browser."
-            );
-          }
-        }
-
-        // Add click event to microphone button
-        micButton.addEventListener("click", startRecording);
-
-        // Add event listener for the send button
-        const textInput = document.getElementById("text-input");
-        const sendButton = document.getElementById("send-button");
-
-        // Function to send text input
-        function sendText() {
-          const text = textInput.value.trim();
           if (text) {
-            // Update UI
-            statusBox.textContent = "Processing your request...";
-
             // Display user's message
-            addMessage(text, true);
+            addChatMessage(text, true);
+
+            // Update voice bubble too
+            voiceMessage.textContent = text;
 
             // Send to server
             fetch(`/api/text/${conversationId}`, {
@@ -612,31 +1182,106 @@
                 return response.json();
               })
               .then((data) => {
-                // Display response
-                if (data.response) {
-                  addMessage(data.response, false);
-                  statusBox.textContent = `Intent detected: ${
-                    data.intent || "unknown"
-                  }`;
-                }
+                // Use the new handler function
+                handleApiResponse(data, false);
               })
               .catch((error) => {
                 console.error("Error:", error);
-                statusBox.textContent =
-                  "Error processing your request. Please try again.";
+                addChatMessage(
+                  "Error processing your request. Please try again.",
+                  false
+                );
               });
 
-            // Clear the input
-            textInput.value = "";
+            // Clear input
+            chatInput.value = "";
           }
         }
 
-        // Add event listeners for send button and Enter key
-        sendButton.addEventListener("click", sendText);
-        textInput.addEventListener("keyup", function (event) {
-          if (event.key === "Enter") {
-            sendText();
+        // Event listeners
+
+        // Toggle speaker/TTS
+        speakerButton.addEventListener("click", function () {
+          const isEnabled = !ttsEnabled;
+          localStorage.setItem("tts-enabled", isEnabled);
+
+          // Toggle active class for visual feedback
+          speakerButton.classList.toggle("active");
+
+          // Give visual feedback
+          if (isEnabled) {
+            voiceMessage.textContent = "Text-to-speech enabled";
+            setTimeout(() => {
+              voiceMessage.textContent =
+                "Hello! How can I help with your healthcare needs?";
+            }, 2000);
+          } else {
+            voiceMessage.textContent = "Text-to-speech disabled";
+
+            // Stop any ongoing speech
+            if (currentAudio) {
+              currentAudio.pause();
+              currentAudio = null;
+            }
+
+            setTimeout(() => {
+              voiceMessage.textContent =
+                "Hello! How can I help with your healthcare needs?";
+            }, 2000);
           }
+        });
+
+        // Chat panel toggle button
+        toggleChatBtn.addEventListener("click", () => {
+          toggleChatPanel(true);
+        });
+
+        // Close chat button
+        closeChatBtn.addEventListener("click", () => {
+          toggleChatPanel(false);
+        });
+
+        // Tap to talk button
+        talkButton.addEventListener("click", function () {
+          // Toggle recording state
+          if (recordingInProgress) {
+            stopVoiceRecording();
+          } else {
+            startVoiceRecording();
+          }
+        });
+
+        // End call button
+        endButton.addEventListener("click", () => {
+          window.location.reload();
+        });
+
+        // Chat send button
+        chatSendButton.addEventListener("click", sendChatMessage);
+
+        // Chat input enter key
+        chatInput.addEventListener("keypress", (e) => {
+          if (e.key === "Enter") {
+            sendChatMessage();
+          }
+        });
+
+        // Chat microphone button - make non-functional
+        chatMicButton.addEventListener("click", function () {
+          // Just show a message that this feature is only available in main interface
+          addChatMessage(
+            "Please use the microphone in the main interface",
+            false
+          );
+        });
+
+        // Chat speaker button - make non-functional
+        chatSpeakerButton.addEventListener("click", function () {
+          // Just show a message that this feature is only available in main interface
+          addChatMessage(
+            "Speaker settings can be changed in the main interface",
+            false
+          );
         });
 
         // Ensure voices are loaded (needed for some browsers)
