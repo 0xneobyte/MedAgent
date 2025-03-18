@@ -111,10 +111,29 @@ def route_by_intent(state):
     print(f"DEBUG WORKFLOW: Routing based on intent: {intent}")
     
     # Check if we need to switch context from appointment to general conversation
-    if state.get("switch_context", False) and intent == "general_inquiry":
+    if state.get("switch_context", False):
         print(f"DEBUG WORKFLOW: Detected context switch flag, routing to call center")
+        # Clear the switch_context flag so it doesn't persist
+        state["switch_context"] = False
         return "call_center"
     
+    # Check if we have a completed operation and a new different intent
+    if "appointment_context" in state:
+        context = state.get("appointment_context", {})
+        current_state = context.get("state", "")
+        
+        # Check if we just completed an operation but now have a different intent
+        # This handles the case where the user immediately wants to do something else
+        completed_states = ["booking_confirmed", "cancellation_confirmed", "reschedule_confirmed"]
+        
+        if current_state in completed_states:
+            # If we've completed an operation and have a new appointment-related intent,
+            # route directly to appointment handling
+            if intent in ["schedule_appointment", "book_appointment", "cancel_appointment", "reschedule_appointment"]:
+                print(f"DEBUG WORKFLOW: Operation completed, routing new intent {intent} to appointment agent")
+                return "appointment"
+    
+    # Standard intent routing
     if intent in ["schedule_appointment", "book_appointment", "cancel_appointment", "reschedule_appointment"]:
         print(f"DEBUG WORKFLOW: Routing to appointment agent for {intent}")
         return "appointment"

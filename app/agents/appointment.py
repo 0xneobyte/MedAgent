@@ -1284,6 +1284,15 @@ def appointment_agent(state):
         # Now handle the specific states with improved logic
         if current_state == STATES["INITIAL"]:
             # At the initial state, determine the right flow based on intent
+            # Enhanced keyword detection for cancel and reschedule
+            cancel_keywords = ["cancel", "delete", "remove", "stop appointment", "no longer need", "don't need the appointment"]
+            reschedule_keywords = ["reschedule", "change", "different time", "different date", "another day", "move appointment"]
+            booking_keywords = ["book", "schedule", "make", "new appointment", "set up", "arrange"]
+            
+            has_cancel_keyword = any(keyword in transcript.lower() for keyword in cancel_keywords)
+            has_reschedule_keyword = any(keyword in transcript.lower() for keyword in reschedule_keywords)
+            has_booking_keyword = any(keyword in transcript.lower() for keyword in booking_keywords)
+            
             if intent == "cancel_appointment" or has_cancel_keyword:
                 debug_log("Detected cancellation intent from initial state")
                 context["state"] = STATES["CANCELLING_COLLECTING_ID"]
@@ -1294,7 +1303,7 @@ def appointment_agent(state):
                 context["state"] = STATES["RESCHEDULING_COLLECTING_ID"]
                 state["response"] = get_step_prompt("rescheduling_collecting_id")
                 state["intent"] = "reschedule_appointment"
-            elif intent == "schedule_appointment" or intent == "book_appointment":
+            elif intent == "schedule_appointment" or intent == "book_appointment" or has_booking_keyword:
                 debug_log("Starting new appointment booking flow")
                 context["state"] = STATES["COLLECTING_NAME"]
                 state["response"] = get_step_prompt("collecting_name")
@@ -2253,7 +2262,39 @@ def appointment_agent(state):
             # Check if the user says thanks or acknowledges completion
             acknowledgement_keywords = ["thank", "thanks", "great", "good", "excellent", "ok", "okay", "perfect", "bye", "goodbye"]
             
-            if any(keyword in transcript.lower() for keyword in acknowledgement_keywords):
+            # Check for new intents that should reset the flow
+            reschedule_keywords = ["reschedule", "change", "different time", "different date", "another day"]
+            cancel_keywords = ["cancel", "delete", "remove", "stop"]
+            new_booking_keywords = ["new appointment", "another appointment", "book again", "schedule again"]
+            
+            if any(keyword in transcript.lower() for keyword in reschedule_keywords):
+                # Reset context and set up for rescheduling
+                context = {
+                    "state": STATES["RESCHEDULING_COLLECTING_ID"],
+                    "booking_notification_sent": context.get("booking_notification_sent", False)
+                }
+                state["intent"] = "reschedule_appointment"
+                state["response"] = "I can help you reschedule an appointment. Could you please provide your appointment ID?"
+            
+            elif any(keyword in transcript.lower() for keyword in cancel_keywords):
+                # Reset context and set up for cancellation
+                context = {
+                    "state": STATES["CANCELLING_COLLECTING_ID"],
+                    "booking_notification_sent": context.get("booking_notification_sent", False)
+                }
+                state["intent"] = "cancel_appointment"
+                state["response"] = "I can help you cancel an appointment. Could you please provide your appointment ID?"
+            
+            elif any(keyword in transcript.lower() for keyword in new_booking_keywords):
+                # Reset context and set up for new booking
+                context = {
+                    "state": STATES["INITIAL"],
+                    "booking_notification_sent": context.get("booking_notification_sent", False)
+                }
+                state["intent"] = "schedule_appointment"
+                state["response"] = "I'd be happy to help you book a new appointment. Could you please tell me your full name?"
+            
+            elif any(keyword in transcript.lower() for keyword in acknowledgement_keywords):
                 # Reset appointment context to clear the booking flow
                 context = {
                     "state": STATES["INITIAL"],
@@ -2273,7 +2314,7 @@ def appointment_agent(state):
                 state["switch_context"] = True
             else:
                 # For other inputs, provide general assistance
-                state["response"] = "I'm here to help with your appointment. What would you like to do?"
+                state["response"] = "I'm here to help with your appointment. What would you like to do? You can book a new appointment, reschedule, or cancel an existing one."
         
         elif current_state == STATES["CANCELLATION_CONFIRMED"]:
             # Handle post-cancellation dialog
@@ -2282,7 +2323,19 @@ def appointment_agent(state):
             # Check if the user says thanks or acknowledges completion
             acknowledgement_keywords = ["thank", "thanks", "great", "good", "excellent", "ok", "okay", "perfect", "bye", "goodbye"]
             
-            if any(keyword in transcript.lower() for keyword in acknowledgement_keywords):
+            # Check for new intents that should reset the flow
+            reschedule_keywords = ["reschedule", "new", "book", "make", "schedule"]
+            
+            if any(keyword in transcript.lower() for keyword in reschedule_keywords):
+                # Reset context and set up for new booking
+                context = {
+                    "state": STATES["INITIAL"],
+                    "cancellation_complete": True
+                }
+                state["intent"] = "schedule_appointment"
+                state["response"] = "I'd be happy to help you book a new appointment. Could you please tell me your full name?"
+            
+            elif any(keyword in transcript.lower() for keyword in acknowledgement_keywords):
                 # Reset appointment context to clear the cancellation flow
                 context = {
                     "state": STATES["INITIAL"],
@@ -2300,7 +2353,7 @@ def appointment_agent(state):
                 state["switch_context"] = True
             else:
                 # For other inputs after cancellation
-                state["response"] = "I'm here to help if you need anything else. What would you like to do?"
+                state["response"] = "I'm here to help if you need anything else. Would you like to schedule a new appointment or can I assist with something else?"
         
         elif current_state == STATES["RESCHEDULE_CONFIRMED"]:
             # Handle post-rescheduling dialog
@@ -2309,7 +2362,29 @@ def appointment_agent(state):
             # Check if the user says thanks or acknowledges completion
             acknowledgement_keywords = ["thank", "thanks", "great", "good", "excellent", "ok", "okay", "perfect", "bye", "goodbye"]
             
-            if any(keyword in transcript.lower() for keyword in acknowledgement_keywords):
+            # Check for new intents that should reset the flow
+            cancel_keywords = ["cancel", "delete", "remove", "stop"]
+            new_booking_keywords = ["new appointment", "another appointment", "book again", "schedule again"]
+            
+            if any(keyword in transcript.lower() for keyword in cancel_keywords):
+                # Reset context and set up for cancellation
+                context = {
+                    "state": STATES["CANCELLING_COLLECTING_ID"],
+                    "reschedule_complete": True
+                }
+                state["intent"] = "cancel_appointment"
+                state["response"] = "I can help you cancel an appointment. Could you please provide your appointment ID?"
+            
+            elif any(keyword in transcript.lower() for keyword in new_booking_keywords):
+                # Reset context and set up for new booking
+                context = {
+                    "state": STATES["INITIAL"],
+                    "reschedule_complete": True
+                }
+                state["intent"] = "schedule_appointment"
+                state["response"] = "I'd be happy to help you book a new appointment. Could you please tell me your full name?"
+            
+            elif any(keyword in transcript.lower() for keyword in acknowledgement_keywords):
                 # Reset appointment context to clear the rescheduling flow
                 context = {
                     "state": STATES["INITIAL"],
