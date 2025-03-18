@@ -839,7 +839,7 @@ def get_step_prompt(step, context=None):
     prompts = {
         "collecting_name": "To book your appointment, I'll need to collect some information. First, please provide your full name.",
         "collecting_phone": "Thank you. Now, please provide your phone number.",
-        "collecting_birthdate": "Great. Now, please provide your date of birth (MM/DD/YYYY).",
+        "collecting_birthdate": "Great. Now, please provide your date of birth.",
         "collecting_reason": "Thanks. What's the reason for your appointment?",
         "suggesting_specialty": "Based on your needs, I recommend seeing {specialty} - {description}. Does this work for you?",
         "collecting_date_time": "When would you like to schedule your appointment? We have available slots on {dates}",
