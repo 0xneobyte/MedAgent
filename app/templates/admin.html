@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+        .container {
+            width: 80%;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .section {
+            margin-bottom: 40px;
+        }
+        .section h2 {
+            margin-bottom: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        table, th, td {
+            border: 1px solid #ddd;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Admin Panel</h1>
+        <div class="section" id="patients-section">
+            <h2>Patients</h2>
+            <table id="patients-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Age</th>
+                        <th>Email</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Patient data will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+        <div class="section" id="doctors-section">
+            <h2>Doctors</h2>
+            <table id="doctors-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Specialization</th>
+                        <th>Email</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Doctor data will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+        <div class="section" id="appointments-section">
+            <h2>Appointments</h2>
+            <table id="appointments-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Patient</th>
+                        <th>Doctor</th>
+                        <th>Date</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Appointment data will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <script>
+        // Fetch data from the backend and populate the tables
+        async function fetchData() {
+            try {
+                const patientsResponse = await fetch('/api/patients');
+                const doctorsResponse = await fetch('/api/doctors');
+                const appointmentsResponse = await fetch('/api/appointments');
+
+                const patients = await patientsResponse.json();
+                const doctors = await doctorsResponse.json();
+                const appointments = await appointmentsResponse.json();
+
+                populateTable('patients-table', patients);
+                populateTable('doctors-table', doctors);
+                populateTable('appointments-table', appointments);
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            }
+        }
+
+        function populateTable(tableId, data) {
+            const tableBody = document.getElementById(tableId).querySelector('tbody');
+            tableBody.innerHTML = ''; // Clear existing data
+
+            data.forEach(item => {
+                const row = document.createElement('tr');
+                Object.values(item).forEach(value => {
+                    const cell = document.createElement('td');
+                    cell.textContent = value;
+                    row.appendChild(cell);
+                });
+                tableBody.appendChild(row);
+            });
+        }
+
+        // Call fetchData on page load
+        document.addEventListener('DOMContentLoaded', fetchData);
+    </script>
+</body>
+</html>
