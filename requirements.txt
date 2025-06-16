@@ -5,7 +5,7 @@ langchain-openai==0.3.7
 langchain-community==0.3.19
 langsmith==0.1.125
 langgraph==0.3.1
-langfuse==2.59.7
+langfuse>=2.63.0
 python-dotenv==1.0.1
 pymongo==4.5.0
 sendgrid==6.10.0
