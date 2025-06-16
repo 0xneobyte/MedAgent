@@ -1,6 +1,6 @@
 import os
 from openai import OpenAI
-from langfuse.client import Langfuse
+from langfuse import Langfuse
 import datetime
 import json
 import re
@@ -564,12 +564,17 @@ def extract_name(transcript):
     """
     
     try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ]
+        
+        # Create a Langfuse generation for proper cost tracking if trace is available
+        generation = None
+        
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript}
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=50
         )
@@ -621,18 +626,41 @@ def extract_phone(transcript):
     """
     
     try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ]
+        
+        # Create a Langfuse generation for proper cost tracking
+        generation = langfuse.start_generation(
+            name="phone_extraction_gpt4",
+            model="gpt-4o",
+            input=messages,
+            metadata={"temperature": 0.1, "max_tokens": 50, "operation": "phone_extraction"}
+        )
+        
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript}
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=50
         )
         
         extracted = response.choices[0].message.content.strip()
         debug_log(f"GPT extracted phone: '{extracted}'")
+        
+        # Update generation with output and usage data for cost tracking
+        generation.update(
+            output=extracted,
+            usage_details={
+                "input": response.usage.prompt_tokens,
+                "output": response.usage.completion_tokens,
+                "total": response.usage.total_tokens
+            }
+        )
+        
+        # End the generation
+        generation.end()
         
         if extracted.lower() == "unknown":
             debug_log("GPT couldn't identify a phone number")
@@ -672,18 +700,41 @@ def extract_birthdate(transcript):
     """
     
     try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ]
+        
+        # Create a Langfuse generation for proper cost tracking
+        generation = langfuse.start_generation(
+            name="birthdate_extraction_gpt4",
+            model="gpt-4o",
+            input=messages,
+            metadata={"temperature": 0.1, "max_tokens": 50, "operation": "birthdate_extraction"}
+        )
+        
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript}
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=50
         )
         
         extracted_date = response.choices[0].message.content.strip()
         debug_log(f"GPT extracted date: '{extracted_date}'")
+        
+        # Update generation with output and usage data for cost tracking
+        generation.update(
+            output=extracted_date,
+            usage_details={
+                "input": response.usage.prompt_tokens,
+                "output": response.usage.completion_tokens,
+                "total": response.usage.total_tokens
+            }
+        )
+        
+        # End the generation
+        generation.end()
         
         if extracted_date.lower() == "unknown":
             debug_log("GPT couldn't identify a date")
@@ -700,7 +751,7 @@ def extract_birthdate(transcript):
         debug_log(f"Error in GPT date extraction: {e}")
         return None
 
-def extract_email(transcript):
+def extract_email(transcript, trace=None):
     """Extract email from transcript with improved handling"""
     debug_log(f"Extracting email from: '{transcript}'")
     
@@ -739,18 +790,41 @@ def extract_email(transcript):
     """
     
     try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ]
+        
+        # Create a Langfuse generation for proper cost tracking if trace is available
+        generation = None
+        if trace:
+            generation = trace.generation(
+                name="email_extraction_gpt4",
+                model="gpt-4o",
+                input=messages,
+                metadata={"temperature": 0.1, "max_tokens": 50, "operation": "email_extraction"}
+            )
+        
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript}
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=50
         )
         
         email = response.choices[0].message.content.strip()
         debug_log(f"GPT extracted email: '{email}'")
+        
+        # Update generation with output and usage data for cost tracking
+        if generation:
+            generation.end(
+                output=email,
+                usage={
+                    "input": response.usage.prompt_tokens,
+                    "output": response.usage.completion_tokens,
+                    "total": response.usage.total_tokens
+                }
+            )
         
         if email.lower() == "unknown":
             debug_log("GPT couldn't identify an email")
@@ -766,7 +840,7 @@ def extract_email(transcript):
         debug_log(f"Error in GPT email extraction: {e}")
         return None
 
-def extract_reason(transcript):
+def extract_reason(transcript, trace=None):
     """Extract reason for visit from transcript"""
     system_prompt = """
     You are a helpful assistant extracting a patient's reason for visiting a doctor from their message.
@@ -775,17 +849,41 @@ def extract_reason(transcript):
     If you cannot determine a reason, respond with "Consultation".
     """
     
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": transcript}
+    ]
+    
+    # Create a Langfuse generation for proper cost tracking if trace is available
+    generation = None
+    if trace:
+        generation = trace.generation(
+            name="reason_extraction_gpt4",
+            model="gpt-4o",
+            input=messages,
+            metadata={"temperature": 0.1, "max_tokens": 100, "operation": "reason_extraction"}
+        )
+    
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": transcript}
-        ],
+        messages=messages,
         temperature=0.1,
         max_tokens=100
     )
     
     reason = response.choices[0].message.content.strip()
+    
+    # Update generation with output and usage data for cost tracking
+    if generation:
+        generation.end(
+            output=reason,
+            usage={
+                "input": response.usage.prompt_tokens,
+                "output": response.usage.completion_tokens,
+                "total": response.usage.total_tokens
+            }
+        )
+    
     if reason.lower() == "unknown":
         return "Consultation"
         
@@ -865,7 +963,7 @@ def get_step_prompt(step, context=None):
     
     return template
 
-def extract_date_time_gpt(transcript):
+def extract_date_time_gpt(transcript, trace=None):
     """Extract date and time from transcript using GPT"""
     debug_log(f"Extracting date and time from: '{transcript}'")
     
@@ -904,12 +1002,24 @@ def extract_date_time_gpt(transcript):
     """
     
     try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ]
+        
+        # Create a Langfuse generation for proper cost tracking if trace is available
+        generation = None
+        if trace:
+            generation = trace.generation(
+                name="datetime_extraction_gpt4",
+                model="gpt-4o",
+                input=messages,
+                metadata={"temperature": 0.1, "max_tokens": 150, "operation": "datetime_extraction", "response_format": "json"}
+            )
+        
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript}
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=150,
             response_format={"type": "json_object"}
@@ -917,6 +1027,17 @@ def extract_date_time_gpt(transcript):
         
         result = json.loads(response.choices[0].message.content)
         debug_log(f"GPT extracted date/time: {result}")
+        
+        # Update generation with output and usage data for cost tracking
+        if generation:
+            generation.end(
+                output=result,
+                usage={
+                    "input": response.usage.prompt_tokens,
+                    "output": response.usage.completion_tokens,
+                    "total": response.usage.total_tokens
+                }
+            )
         
         # Ensure the year is 2025 for detected dates
         if result.get("date") and "-" in result.get("date", ""):
@@ -932,7 +1053,7 @@ def extract_date_time_gpt(transcript):
         debug_log(f"Error in GPT date/time extraction: {e}")
         return None, None, "schedule"
 
-def extract_appointment_id(transcript):
+def extract_appointment_id(transcript, trace=None):
     """Extract appointment ID from transcript"""
     debug_log(f"Extracting appointment ID from: '{transcript}'")
     
@@ -955,18 +1076,41 @@ def extract_appointment_id(transcript):
     """
     
     try:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ]
+        
+        # Create a Langfuse generation for proper cost tracking if trace is available
+        generation = None
+        if trace:
+            generation = trace.generation(
+                name="appointment_id_extraction_gpt4",
+                model="gpt-4o",
+                input=messages,
+                metadata={"temperature": 0.1, "max_tokens": 50, "operation": "appointment_id_extraction"}
+            )
+        
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript}
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=50
         )
         
         extracted_id = response.choices[0].message.content.strip()
         debug_log(f"GPT extracted appointment ID: '{extracted_id}'")
+        
+        # Update generation with output and usage data for cost tracking
+        if generation:
+            generation.end(
+                output=extracted_id,
+                usage={
+                    "input": response.usage.prompt_tokens,
+                    "output": response.usage.completion_tokens,
+                    "total": response.usage.total_tokens
+                }
+            )
         
         if extracted_id.lower() == "unknown":
             debug_log("GPT couldn't identify an appointment ID")
@@ -982,12 +1126,13 @@ def extract_appointment_id(transcript):
         debug_log(f"Error in GPT appointment ID extraction: {e}")
         return None
 
-def extract_date_time_action(transcript):
+def extract_date_time_action(transcript, trace=None):
     """
     Extract date, time, and action from a transcript
     
     Args:
         transcript: User input text
+        trace: Langfuse trace for cost tracking
     
     Returns:
         dict: Result containing success status, extracted date/time values, and message if applicable
@@ -995,7 +1140,7 @@ def extract_date_time_action(transcript):
     debug_log(f"Extracting date/time/action from: '{transcript}'")
     try:
         # First try with GPT extraction
-        date_str, time_str, action = extract_date_time_gpt(transcript)
+        date_str, time_str, action = extract_date_time_gpt(transcript, trace)
         debug_log(f"GPT extraction: date={date_str}, time={time_str}, action={action}")
         
         # If we only have a date but no time, return partial success and ask for time
@@ -1221,15 +1366,6 @@ def appointment_agent(state):
         }
     else:
         debug_log(f"Using existing appointment_context: {context}")
-    
-    # Create a trace in Langfuse
-    trace = langfuse.trace(
-        name="appointment_agent",
-        metadata={
-            "transcript": state.get("transcript", ""),
-            "intent": state.get("intent", "unknown")
-        }
-    )
     
     try:
         # Analyze the current state and transcript together to determine the correct action
@@ -1926,12 +2062,22 @@ def appointment_agent(state):
                 If you cannot determine a specialty, respond with "General Practitioner".
                 """
                 
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": transcript}
+                ]
+                
+                # Create a Langfuse generation for proper cost tracking
+                generation = langfuse.start_generation(
+                    name="specialty_extraction_gpt4",
+                    model="gpt-4o",
+                    input=messages,
+                    metadata={"temperature": 0.1, "max_tokens": 20, "operation": "specialty_extraction"}
+                )
+                
                 response = client.chat.completions.create(
                     model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": transcript}
-                    ],
+                    messages=messages,
                     temperature=0.1,
                     max_tokens=20
                 )
@@ -1939,6 +2085,19 @@ def appointment_agent(state):
                 specialty = response.choices[0].message.content.strip()
                 context["doctor_specialty"] = specialty
                 debug_log(f"Changed specialty to: {specialty}")
+                
+                # Update generation with output and usage data for cost tracking
+                generation.update(
+                    output=specialty,
+                    usage_details={
+                        "input": response.usage.prompt_tokens,
+                        "output": response.usage.completion_tokens,
+                        "total": response.usage.total_tokens
+                    }
+                )
+                
+                # End the generation
+                generation.end()
             
             # Find doctors of this specialty
             try:
@@ -2413,10 +2572,7 @@ def appointment_agent(state):
         debug_log(f"Saving appointment_context: {context}")
         state["appointment_context"] = context
         
-        trace.update(status="success")
-        
     except Exception as e:
-        trace.update(status="error", error={"message": str(e)})
         debug_log(f"Error in appointment agent: {e}")
         
         # Check if we're in the middle of a state transition and already have key data
