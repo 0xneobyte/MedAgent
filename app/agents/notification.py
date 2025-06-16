@@ -1,7 +1,7 @@
 import os
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
-from langfuse.client import Langfuse
+from langfuse import Langfuse
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
