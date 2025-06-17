@@ -290,14 +290,6 @@ def notification_agent(state):
     Returns:
         dict: Updated state with notification information
     """
-    # Create a trace in Langfuse
-    trace = langfuse.trace(
-        name="notification_agent",
-        metadata={
-            "intent": state.get("intent", "unknown")
-        }
-    )
-    
     try:
         # Get the intent and log it for debugging
         intent = state.get("intent", "")
@@ -453,10 +445,8 @@ def notification_agent(state):
         state["notification_sent"] = notification_sent
         
         print(f"======= NOTIFICATION AGENT END =======")
-        trace.update(status="success")
     except Exception as e:
         print(f"Error in notification agent: {e}")
-        trace.update(status="error", error={"message": str(e)})
         state["notification_sent"] = False
     
     return state 
