@@ -1,6 +1,6 @@
 import os
 from openai import OpenAI
-from langfuse.client import Langfuse
+from langfuse import Langfuse
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -80,15 +80,6 @@ def call_center_agent(state):
     # Extract the transcript from the state
     transcript = state.get("transcript", "")
     
-    # Create a trace in Langfuse
-    trace = langfuse.trace(
-        name="call_center_agent",
-        metadata={
-            "transcript": transcript,
-            "intent": state.get("intent", "unknown")
-        }
-    )
-    
     try:
         # First, prioritize health-related queries over simple keyword matching
         # Check if it's a health-related query (including specialist recommendations)
@@ -122,7 +113,6 @@ def call_center_agent(state):
         # If it's a health query, handle it with the health-specific GPT logic
         if is_health_query:
             debug_log("Health-related query detected - processing with health-specific prompt")
-            span = trace.span(name="gpt4_health_inquiry")
             
             # Enhanced health-specific prompt for both general health questions and specialist recommendations
             system_prompt = """
@@ -151,17 +141,38 @@ def call_center_agent(state):
             """
             
             # Send the transcript to GPT-4o with our enhanced health prompt
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript}
+            ]
+            
+            # Create a Langfuse generation for proper cost tracking
+            generation = langfuse.start_generation(
+                name="health_inquiry_gpt4",
+                model="gpt-4o",
+                input=messages,
+                metadata={"temperature": 0.5, "query_type": "health_related"}
+            )
+            
             response = client.chat.completions.create(
                 model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": transcript}
-                ],
+                messages=messages,
                 temperature=0.5
             )
             
             state["response"] = response.choices[0].message.content
-            span.end()
+            
+            # Update generation with output and usage data for cost tracking
+            generation.update(
+                output=state["response"],
+                usage_details={
+                    "input": response.usage.prompt_tokens,
+                    "output": response.usage.completion_tokens,
+                    "total": response.usage.total_tokens
+                }
+            )
+            generation.end()
+            
             debug_log(f"Health response generated")
             
         else:
@@ -186,21 +197,11 @@ def call_center_agent(state):
                 if knowledge_base_match:
                     break
             
-            # If we found a match, create a span with the match information
+            # If we found a match, respond with the knowledge base answer
             if knowledge_base_match:
-                trace.span(
-                    name="knowledge_base_match",
-                    metadata={
-                        "matched_category": matched_category,
-                        "matched_phrase": matched_phrase
-                    }
-                )
                 state["response"] = knowledge_base_match
                 debug_log(f"Responding with knowledge base answer: '{knowledge_base_match}'")
             else:
-                # Create a Langfuse span for GPT response without using context manager
-                span = trace.span(name="gpt4_general_inquiry")
-                
                 # If no direct match, use GPT-4o for a response
                 system_prompt = """
                 You are an AI assistant for a healthcare clinic. Your goal is to provide helpful, accurate, 
@@ -220,31 +221,43 @@ def call_center_agent(state):
                 Remember, you represent a healthcare clinic, so maintain professionalism at all times.
                 """
                 
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": transcript}
+                ]
+                
+                # Create a Langfuse generation for proper cost tracking
+                generation = langfuse.start_generation(
+                    name="general_inquiry_gpt4",
+                    model="gpt-4o",
+                    input=messages,
+                    metadata={"temperature": 0.7, "query_type": "general_inquiry"}
+                )
+                
                 response = client.chat.completions.create(
                     model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": transcript}
-                    ],
+                    messages=messages,
                     temperature=0.7
                 )
                 
                 state["response"] = response.choices[0].message.content
                 
-                # Create a new span with the response length metadata
-                trace.span(
-                    name="response_metadata", 
-                    metadata={"response_length": len(state["response"])}
+                # Update generation with output and usage data for cost tracking
+                generation.update(
+                    output=state["response"],
+                    usage_details={
+                        "input": response.usage.prompt_tokens,
+                        "output": response.usage.completion_tokens,
+                        "total": response.usage.total_tokens
+                    }
                 )
+                generation.end()
                 
-                # End the original span
-                span.end()
                 debug_log(f"General response generated")
         
-        trace.update(status="success")
+        debug_log(f"Call center agent completed successfully")
     
     except Exception as e:
-        trace.update(status="error", error={"message": str(e)})
         debug_log(f"Error in call center agent: {e}")
         state["response"] = "I'm having trouble finding information about that. Please try asking in a different way or contact our office directly for more information."
     

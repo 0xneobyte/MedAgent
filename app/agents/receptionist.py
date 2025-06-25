@@ -3,7 +3,7 @@ import io
 import tempfile
 import re
 from openai import OpenAI
-from langfuse.client import Langfuse
+from langfuse import Langfuse
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -29,12 +29,6 @@ def transcribe_audio(audio_file):
     Returns:
         str: The transcribed text
     """
-    # Create a trace in Langfuse
-    trace = langfuse.trace(
-        name="audio_transcription",
-        metadata={"file_type": audio_file.content_type}
-    )
-    
     try:
         # Read audio data
         audio_data = audio_file.read()
@@ -51,20 +45,12 @@ def transcribe_audio(audio_file):
                 file=audio
             )
         
-        # Create a span with metadata directly in the constructor
-        trace.span(
-            name="whisper_transcription", 
-            metadata={"transcript_length": len(transcript.text)}
-        )
-        
         # Remove the temporary file
         os.unlink(temp_audio_path)
         
-        trace.update(status="success")
         return transcript.text
     
     except Exception as e:
-        trace.update(status="error", error={"message": str(e)})
         print(f"Error transcribing audio: {e}")
         return "Sorry, I couldn't understand the audio."
 
@@ -166,12 +152,6 @@ def process_query(transcript):
         debug_log("Direct appointment intent detection succeeded")
         return "schedule_appointment"
     
-    # Create a trace in Langfuse
-    trace = langfuse.trace(
-        name="intent_classification",
-        metadata={"transcript": transcript}
-    )
-    
     try:
         system_prompt = """
         You are an AI assistant for a healthcare clinic. Your task is to identify the intent 
@@ -195,12 +175,22 @@ def process_query(transcript):
         """
         
         # Identify intent using GPT-4o
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript}
+        ]
+        
+        # Create a Langfuse generation for proper cost tracking
+        generation = langfuse.start_generation(
+            name="intent_classification_gpt4",
+            model="gpt-4o",
+            input=messages,
+            metadata={"temperature": 0.1, "max_tokens": 50}
+        )
+        
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript}
-            ],
+            messages=messages,
             temperature=0.1,
             max_tokens=50
         )
@@ -208,17 +198,22 @@ def process_query(transcript):
         intent = response.choices[0].message.content.strip().lower()
         debug_log(f"GPT intent classification result: {intent}")
         
-        # Create a span with metadata directly in the constructor
-        trace.span(
-            name="gpt4_intent_classification",
-            metadata={"detected_intent": intent}
+        # Update generation with output and usage data for cost tracking
+        generation.update(
+            output=intent,
+            usage_details={
+                "input": response.usage.prompt_tokens,
+                "output": response.usage.completion_tokens,
+                "total": response.usage.total_tokens
+            }
         )
         
-        trace.update(status="success")
+        # End the generation
+        generation.end()
+        
         return intent
     
     except Exception as e:
-        trace.update(status="error", error={"message": str(e)})
         debug_log(f"Error in intent classification: {str(e)}")
         
         # Check for rescheduling keywords as a fallback
