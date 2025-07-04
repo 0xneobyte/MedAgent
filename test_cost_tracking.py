@@ -12,14 +12,14 @@ load_dotenv()
 # Test imports
 try:
     from langfuse import Langfuse
-    print("✅ Langfuse import successful")
+    print("Langfuse import successful")
 except Exception as e:
     print(f"❌ Langfuse import failed: {e}")
     exit(1)
 
 try:
     from openai import OpenAI
-    print("✅ OpenAI import successful")
+    print("OpenAI import successful")
 except Exception as e:
     print(f"❌ OpenAI import failed: {e}")
     exit(1)
@@ -31,14 +31,14 @@ try:
         secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
         host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
     )
-    print("✅ Langfuse client initialized")
+    print("Langfuse client initialized")
 except Exception as e:
     print(f"❌ Langfuse client initialization failed: {e}")
     exit(1)
 
 try:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    print("✅ OpenAI client initialized")
+    print("OpenAI client initialized")
 except Exception as e:
     print(f"❌ OpenAI client initialization failed: {e}")
     exit(1)
@@ -85,7 +85,7 @@ def test_cost_tracking():
         # End the generation
         generation.end()
         
-        print(f"✅ Cost tracking test successful!")
+        print(f"Cost tracking test successful!")
         print(f"   Response: {output}")
         print(f"   Tokens used: {response.usage.total_tokens}")
         print(f"   Input tokens: {response.usage.prompt_tokens}")
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     success = test_cost_tracking()
     
     if success:
-        print("\n✅ All tests passed! Cost tracking should now be working in Langfuse.")
+        print("\nAll tests passed! Cost tracking should now be working in Langfuse.")
         print("💡 The key changes made:")
         print("   - Replaced spans with generations for OpenAI API calls")
         print("   - Added usage data (input/output/total tokens) to generations")

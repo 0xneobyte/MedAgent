@@ -1,6 +1,11 @@
 import os
+import logging
 from openai import OpenAI
 from langfuse import Langfuse
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -34,9 +39,13 @@ def content_management_agent(state):
     Returns:
         dict: Updated state with validated response
     """
+    conversation_id = state.get("conversation_id", "unknown")
+    logger.info(f"Content Management: Validating response for compliance [ID: {conversation_id[:8]}]")
+    
     # If there's no response, nothing to validate
     if "response" not in state:
         state["response"] = "I'm sorry, but I don't have enough information to provide a response."
+        logger.warning(f"No response found in state - providing default response")
         return state
     
     try:
@@ -62,6 +71,8 @@ def content_management_agent(state):
         
         # If issues were found, modify the response
         if issues_found:
+            logger.warning(f"Compliance issues detected: {', '.join(issues_found)} - correcting response")
+            
             # Use GPT-4o to fix the response
             system_prompt = f"""
             You are an AI content reviewer for a healthcare clinic. Review the following response 
@@ -110,6 +121,10 @@ def content_management_agent(state):
             
             # End the generation
             generation.end()
+            
+            logger.info(f"Response corrected for compliance (tokens: {correction_response.usage.total_tokens})")
+        else:
+            logger.info(f"Response passed compliance validation")
         
         # In a more advanced system, we could also:
         # 1. Check response against a vector store of previous responses
@@ -117,7 +132,8 @@ def content_management_agent(state):
         # 3. Ensure consistency with previous communications
     
     except Exception as e:
-        print(f"Error in content management agent: {e}")
+        logger.error(f"Error in content management agent: {e}")
         # We won't change the response on error - just log the issue
     
+    logger.info(f"Content Management: Validation complete")
     return state

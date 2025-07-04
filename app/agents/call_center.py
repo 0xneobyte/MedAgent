@@ -1,6 +1,11 @@
 import os
+import logging
 from openai import OpenAI
 from langfuse import Langfuse
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -11,10 +16,6 @@ langfuse = Langfuse(
     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
     host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 )
-
-def debug_log(message):
-    """Helper function to print debug messages"""
-    print(f"DEBUG CALL CENTER: {message}")
 
 # Simple knowledge base for demo purposes
 KNOWLEDGE_BASE = {
@@ -74,8 +75,10 @@ def call_center_agent(state):
     Returns:
         dict: Updated state with response to general inquiries
     """
-    debug_log(f"Call center agent received state with intent: {state.get('intent')}")
-    debug_log(f"Transcript: '{state.get('transcript', '')}'")
+    intent = state.get('intent', 'unknown')
+    conversation_id = state.get("conversation_id", "unknown")
+    
+    logger.info(f"Call Center Agent: Handling '{intent}' inquiry [ID: {conversation_id}]")
     
     # Extract the transcript from the state
     transcript = state.get("transcript", "")
@@ -93,7 +96,6 @@ def call_center_agent(state):
         for term in health_terms:
             if term in transcript.lower():
                 is_health_query = True
-                debug_log(f"Health term detected: '{term}' in '{transcript}'")
                 break
                 
         # Additional check for doctor recommendation queries
@@ -107,12 +109,11 @@ def call_center_agent(state):
             for pattern in doctor_recommendation_patterns:
                 if pattern in transcript.lower():
                     is_health_query = True
-                    debug_log(f"Doctor recommendation pattern detected: '{pattern}' in '{transcript}'")
                     break
         
         # If it's a health query, handle it with the health-specific GPT logic
         if is_health_query:
-            debug_log("Health-related query detected - processing with health-specific prompt")
+            logger.info("Processing health-related inquiry with specialized medical guidance")
             
             # Enhanced health-specific prompt for both general health questions and specialist recommendations
             system_prompt = """
@@ -173,26 +174,19 @@ def call_center_agent(state):
             )
             generation.end()
             
-            debug_log(f"Health response generated")
+            logger.info(f"Health inquiry response generated (tokens: {response.usage.total_tokens})")
             
         else:
             # Continue with the regular flow for non-health queries
-            # Check if this is a simple greeting or short message
-            if len(transcript.split()) <= 5:
-                debug_log(f"Short message detected: '{transcript}'")
-            
             # Check if the query matches any knowledge base items
             knowledge_base_match = None
             matched_category = None
-            matched_phrase = None
             
             for category, data in KNOWLEDGE_BASE.items():
                 for phrase in data["question"]:
                     if phrase.lower() in transcript.lower():
                         knowledge_base_match = data["answer"]
                         matched_category = category
-                        matched_phrase = phrase
-                        debug_log(f"Knowledge base match found: {category} - '{phrase}'")
                         break
                 if knowledge_base_match:
                     break
@@ -200,7 +194,7 @@ def call_center_agent(state):
             # If we found a match, respond with the knowledge base answer
             if knowledge_base_match:
                 state["response"] = knowledge_base_match
-                debug_log(f"Responding with knowledge base answer: '{knowledge_base_match}'")
+                logger.info(f"Response generated from knowledge base: '{matched_category}' category")
             else:
                 # If no direct match, use GPT-4o for a response
                 system_prompt = """
@@ -253,13 +247,12 @@ def call_center_agent(state):
                 )
                 generation.end()
                 
-                debug_log(f"General response generated")
+                logger.info(f"General inquiry response generated via GPT-4o (tokens: {response.usage.total_tokens})")
         
-        debug_log(f"Call center agent completed successfully")
+        logger.info(f"Call Center Agent: Response processing complete")
     
     except Exception as e:
-        debug_log(f"Error in call center agent: {e}")
+        logger.error(f"Error in call center agent: {e}")
         state["response"] = "I'm having trouble finding information about that. Please try asking in a different way or contact our office directly for more information."
     
-    debug_log(f"Final response: '{state.get('response', '')}'")
     return state 
