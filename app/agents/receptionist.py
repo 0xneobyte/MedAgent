@@ -2,8 +2,13 @@ import os
 import io
 import tempfile
 import re
+import logging
 from openai import OpenAI
 from langfuse import Langfuse
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -14,10 +19,6 @@ langfuse = Langfuse(
     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
     host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 )
-
-def debug_log(message):
-    """Helper function to print debug messages"""
-    print(f"DEBUG RECEPTIONIST: {message}")
 
 def transcribe_audio(audio_file):
     """
@@ -140,16 +141,16 @@ def process_query(transcript):
     Returns:
         dict: A dictionary containing the intent and other details
     """
-    debug_log(f"Processing transcript: '{transcript}'")
+    logger.info(f"Processing query for intent classification")
     
     # First, check for rescheduling intent specifically
     if detect_reschedule_intent(transcript):
-        debug_log("Detected reschedule intent")
+        logger.info("Intent classified as reschedule_appointment via keyword detection")
         return "reschedule_appointment"
     
     # Then check for general appointment intent
     if detect_appointment_intent(transcript):
-        debug_log("Direct appointment intent detection succeeded")
+        logger.info("Intent classified as schedule_appointment via keyword detection")
         return "schedule_appointment"
     
     try:
@@ -196,7 +197,7 @@ def process_query(transcript):
         )
         
         intent = response.choices[0].message.content.strip().lower()
-        debug_log(f"GPT intent classification result: {intent}")
+        logger.info(f"Intent classified as '{intent}' via GPT-4o (tokens: {response.usage.total_tokens})")
         
         # Update generation with output and usage data for cost tracking
         generation.update(
@@ -214,22 +215,22 @@ def process_query(transcript):
         return intent
     
     except Exception as e:
-        debug_log(f"Error in intent classification: {str(e)}")
+        logger.warning(f"GPT intent classification failed: {str(e)}, falling back to keyword detection")
         
         # Check for rescheduling keywords as a fallback
         if "reschedule" in transcript.lower() or "change appointment" in transcript.lower() or "move appointment" in transcript.lower():
-            debug_log("Detected rescheduling intent in fallback")
+            logger.info("Intent classified as reschedule_appointment via fallback")
             return "reschedule_appointment"
         # Check for cancellation keywords
         elif "cancel" in transcript.lower() or "cancelation" in transcript.lower():
-            debug_log("Detected cancellation intent in fallback")
+            logger.info("Intent classified as cancel_appointment via fallback")
             return "cancel_appointment"
         # Return schedule_appointment as a fallback if the query has appointment-like keywords
         elif "appointment" in transcript.lower() or "book" in transcript.lower() or "schedule" in transcript.lower():
-            debug_log("Detected general appointment intent in fallback")
+            logger.info("Intent classified as schedule_appointment via fallback")
             return "schedule_appointment"
         
-        debug_log("No specific intent detected, returning unknown")
+        logger.warning("No specific intent detected, returning unknown")
         return "unknown"
 
 def receptionist_agent(state):
@@ -244,13 +245,14 @@ def receptionist_agent(state):
     """
     # Extract the transcript from the state
     transcript = state.get("transcript", "")
+    conversation_id = state.get("conversation_id", "unknown")
     
-    debug_log(f"Receptionist agent received transcript: '{transcript}'")
+    logger.info(f"Receptionist Agent: Processing new request [ID: {conversation_id}]")
     
     # Process the query to identify intent
     intent = process_query(transcript)
     
-    debug_log(f"Final intent classification: {intent}")
+    logger.info(f"Intent Classification Complete: '{intent}' -> Routing to appropriate agent")
     
     # Update the state with the intent
     state["intent"] = intent

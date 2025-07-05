@@ -1,3 +1,4 @@
+import logging
 from langgraph.graph import StateGraph
 from typing import Dict, Any, TypedDict, List
 from app.agents.receptionist import receptionist_agent
@@ -5,6 +6,10 @@ from app.agents.appointment import appointment_agent
 from app.agents.call_center import call_center_agent
 from app.agents.content_management import content_management_agent
 from app.agents.notification import notification_agent
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Define a TypedDict for our state schema
 class WorkflowState(TypedDict):
@@ -22,10 +27,6 @@ def receptionist_agent_wrapper(state):
     """
     Wrapper around receptionist_agent that preserves intent for ongoing conversations
     """
-    # Print received state for debugging
-    print(f"DEBUG WORKFLOW: Processing state with transcript: '{state.get('transcript', '')}'")
-    print(f"DEBUG WORKFLOW: Initial state: {state}")
-    
     # Get the appointment context to check current state
     appointment_context = state.get("appointment_context", {})
     current_appt_state = appointment_context.get("state", "initial")
@@ -33,7 +34,7 @@ def receptionist_agent_wrapper(state):
     # Check if we're in an ongoing appointment conversation
     if state.get("conversation_in_progress") and state.get("original_intent"):
         # If we're in a conversation, preserve the original intent
-        print(f"DEBUG WORKFLOW: Preserving original intent: {state.get('original_intent')}")
+        logger.info(f"Workflow: Continuing conversation with preserved intent: {state.get('original_intent')}")
         
         # First let the receptionist do its job
         updated_state = receptionist_agent(state)
@@ -47,24 +48,19 @@ def receptionist_agent_wrapper(state):
         if has_cancel and updated_state.get("intent") != "cancel_appointment":
             # Override with cancellation intent
             updated_state["intent"] = "cancel_appointment"
-            print(f"DEBUG WORKFLOW: User explicitly mentioned cancellation, updating intent")
+            logger.info(f"Workflow: Intent overridden to cancellation based on user input")
         elif has_reschedule and updated_state.get("intent") != "reschedule_appointment":
             # Override with reschedule intent
             updated_state["intent"] = "reschedule_appointment"
-            print(f"DEBUG WORKFLOW: User explicitly mentioned rescheduling, updating intent")
+            logger.info(f"Workflow: Intent overridden to reschedule based on user input")
         # If we're already in a cancellation or rescheduling flow, maintain that intent
         elif "cancell" in current_appt_state:
             updated_state["intent"] = "cancel_appointment"
-            print(f"DEBUG WORKFLOW: Maintaining cancellation intent due to current state: {current_appt_state}")
         elif "reschedul" in current_appt_state:
             updated_state["intent"] = "reschedule_appointment" 
-            print(f"DEBUG WORKFLOW: Maintaining rescheduling intent due to current state: {current_appt_state}")
         # Otherwise maintain the original intent if the new one isn't a special intent
         elif updated_state.get("intent") not in ["cancel_appointment", "reschedule_appointment"]:
             updated_state["intent"] = state.get("original_intent")
-            print(f"DEBUG WORKFLOW: Overriding intent to original: {updated_state['intent']}")
-        else:
-            print(f"DEBUG WORKFLOW: Keeping new special intent: {updated_state.get('intent')}")
         
         return updated_state
     else:
@@ -79,14 +75,12 @@ def receptionist_agent_wrapper(state):
         # If keywords are present but intent doesn't match, override it
         if has_cancel and updated_state.get("intent") != "cancel_appointment":
             updated_state["intent"] = "cancel_appointment"
-            print(f"DEBUG WORKFLOW: Detected cancellation keyword, setting intent to cancel_appointment")
         elif has_reschedule and updated_state.get("intent") != "reschedule_appointment":
             updated_state["intent"] = "reschedule_appointment"
-            print(f"DEBUG WORKFLOW: Detected rescheduling keyword, setting intent to reschedule_appointment")
         
         # If this is a new appointment intent, mark the conversation as in progress
         if updated_state.get("intent") in ["schedule_appointment", "cancel_appointment", "reschedule_appointment"]:
-            print(f"DEBUG WORKFLOW: New {updated_state.get('intent')} conversation detected, marking as in progress")
+            logger.info(f"Workflow: New {updated_state.get('intent')} conversation started")
             updated_state["conversation_in_progress"] = True
             updated_state["original_intent"] = updated_state.get("intent")
         
@@ -107,12 +101,11 @@ workflow_builder.add_node("notification", notification_agent)
 def route_by_intent(state):
     intent = state.get("intent", "")
     
-    # For debugging
-    print(f"DEBUG WORKFLOW: Routing based on intent: {intent}")
+    logger.info(f"Workflow Router: Intent '{intent}' detected")
     
     # Check if we need to switch context from appointment to general conversation
     if state.get("switch_context", False):
-        print(f"DEBUG WORKFLOW: Detected context switch flag, routing to call center")
+        logger.info(f"Context switch detected - routing to call center")
         # Clear the switch_context flag so it doesn't persist
         state["switch_context"] = False
         return "call_center"
@@ -123,23 +116,22 @@ def route_by_intent(state):
         current_state = context.get("state", "")
         
         # Check if we just completed an operation but now have a different intent
-        # This handles the case where the user immediately wants to do something else
         completed_states = ["booking_confirmed", "cancellation_confirmed", "reschedule_confirmed"]
         
         if current_state in completed_states:
             # If we've completed an operation and have a new appointment-related intent,
             # route directly to appointment handling
             if intent in ["schedule_appointment", "book_appointment", "cancel_appointment", "reschedule_appointment"]:
-                print(f"DEBUG WORKFLOW: Operation completed, routing new intent {intent} to appointment agent")
+                logger.info(f"Operation completed - routing new '{intent}' to appointment agent")
                 return "appointment"
     
     # Standard intent routing
     if intent in ["schedule_appointment", "book_appointment", "cancel_appointment", "reschedule_appointment"]:
-        print(f"DEBUG WORKFLOW: Routing to appointment agent for {intent}")
+        logger.info(f"Routing to Appointment Agent")
         return "appointment"
     else:
         # Route all other intents to call center (general_inquiry, health_question, other, unknown, etc.)
-        print(f"DEBUG WORKFLOW: Routing to call center for {intent}")
+        logger.info(f"Routing to Call Center Agent")
         return "call_center"
 
 # Set up the routing from receptionist
@@ -155,16 +147,14 @@ workflow_builder.add_conditional_edges(
 # After appointment handling, conditionally route to notification agent
 def should_send_notification(state):
     """Determine if we should route to notification agent"""
-    print(f"DEBUG WORKFLOW: Checking if notification is needed")
-    
     # Check if we've already sent a notification for this operation
     if state.get("notification_sent", False):
-        print(f"DEBUG WORKFLOW: Notification already sent, skipping")
+        logger.info(f"Notification already sent - skipping to content management")
         return "content_management"
     
     # Direct flag from appointment agent
     if state.get("needs_notification", False):
-        print(f"DEBUG WORKFLOW: Notification explicitly requested by agent")
+        logger.info(f"Notification explicitly requested - routing to notification agent")
         return "notification"
     
     # Check for fresh appointment details (new booking)
@@ -201,15 +191,14 @@ def should_send_notification(state):
                (context.get("state") == "cancellation_confirmed" and not context.get("cancellation_notification_sent", False)) or \
                (context.get("state") == "reschedule_confirmed" and not context.get("reschedule_notification_sent", False)):
                 operation_just_completed = True
-                print(f"DEBUG WORKFLOW: Operation just completed: {context.get('state')}")
     
     needs_notification = has_new_appointment or has_cancellation or has_reschedule or operation_just_completed
     
     if needs_notification:
-        print(f"DEBUG WORKFLOW: Notification needed, routing to notification agent")
+        logger.info(f"Notification needed - routing to notification agent")
         return "notification"
     else:
-        print(f"DEBUG WORKFLOW: No notification needed, skipping notification agent")
+        logger.info(f"No notification needed - proceeding to content management")
         return "content_management"
 
 # Replace direct edge with conditional routing
@@ -225,10 +214,7 @@ workflow_builder.add_conditional_edges(
 
 # Add a conditional edge from notification to content management
 def after_notification(state):
-    print(f"DEBUG WORKFLOW: After notification agent, state contains: {list(state.keys())}")
-    print(f"DEBUG WORKFLOW: Intent after notification: {state.get('intent', 'None')}")
-    if "cancellation_details" in state:
-        print(f"DEBUG WORKFLOW: Has cancellation details: {state['cancellation_details']}")
+    logger.info(f"Notification completed - routing to content management for final validation")
     return "content_management"
 
 workflow_builder.add_conditional_edges(
@@ -272,37 +258,29 @@ def process_workflow(input_state):
     cancellation_details = None
     if has_cancellation_direct:
         cancellation_details = input_state["cancellation_details"]
-        print("DEBUG WORKFLOW: Found cancellation details directly in input state")
     elif has_cancellation_context:
         cancellation_details = input_state["appointment_context"]["cancellation_details"]
-        print("DEBUG WORKFLOW: Found cancellation details in appointment_context")
     
     # Run the workflow
-    print("DEBUG WORKFLOW: Running workflow with input state keys:", list(input_state.keys()))
+    logger.info(f"LangGraph workflow execution started")
     final_state = workflow.invoke(input_state)
-    print("DEBUG WORKFLOW: Workflow returned final state keys:", list(final_state.keys()))
+    logger.info(f"LangGraph workflow execution completed")
     
     # Check for cancellation intent and details in the final state
-    if final_state.get("intent") == "cancel_appointment":
-        print("DEBUG WORKFLOW: Final state has cancel_appointment intent")
-        
+    if final_state.get("intent") == "cancel_appointment":        
         # Ensure cancellation details are in the final state
         if "cancellation_details" not in final_state and cancellation_details:
-            print("DEBUG WORKFLOW: Restoring cancellation details to final state")
             final_state["cancellation_details"] = cancellation_details
         
         # Also check if cancellation details are in the appointment_context
         if "appointment_context" in final_state and "cancellation_details" in final_state["appointment_context"]:
-            print("DEBUG WORKFLOW: Found cancellation details in final appointment_context")
-            
             # Make sure they're also in the root state
             if "cancellation_details" not in final_state:
                 final_state["cancellation_details"] = final_state["appointment_context"]["cancellation_details"]
-                print("DEBUG WORKFLOW: Copied cancellation details from context to root state")
     
     # Check if we need to reset the conversation state due to a context switch
     if final_state.get("switch_context", False):
-        print("DEBUG WORKFLOW: Context switch detected, resetting conversation tracking")
+        logger.info(f"Context switch detected - resetting conversation tracking")
         final_state["conversation_in_progress"] = False
         final_state["original_intent"] = ""
         
@@ -328,7 +306,6 @@ def process_workflow(input_state):
             minimal_context.update(notification_flags)
             
             final_state["appointment_context"] = minimal_context
-            print(f"DEBUG WORKFLOW: Reset appointment context to minimal state: {minimal_context}")
         
         # Remove the switch_context flag so it doesn't trigger again
         final_state.pop("switch_context", None)
